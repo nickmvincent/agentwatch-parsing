@@ -1,0 +1,51 @@
+{
+  "name": "@agentwatch/parsing",
+  "version": "0.1.0",
+  "description": "Parse AI agent transcripts (Claude Code, Codex CLI, Gemini CLI) into a unified format",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./adapters": "./src/adapters/index.ts",
+    "./types": "./src/types.ts"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.0.0"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "keywords": [
+    "transcript",
+    "parsing",
+    "claude",
+    "claude-code",
+    "codex",
+    "codex-cli",
+    "gemini",
+    "gemini-cli",
+    "agent",
+    "ai",
+    "llm"
+  ],
+  "author": "nmvg",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nmvg/agentwatch-parsing.git"
+  },
+  "homepage": "https://github.com/nmvg/agentwatch-parsing#readme",
+  "bugs": {
+    "url": "https://github.com/nmvg/agentwatch-parsing/issues"
+  }
+}

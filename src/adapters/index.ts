@@ -1,0 +1,312 @@
+/**
+ * Adapter registry and auto-detection for transcript formats.
+ */
+
+import type {
+  UnifiedEntry,
+  UnifiedTranscript,
+  AgentType,
+  AgentInfo
+} from "../types";
+import type { SchemaLogger } from "../schema-logger";
+
+// Import adapters
+import {
+  parseClaudeEntry,
+  parseClaudeEntries,
+  parseClaudeTranscript,
+  scanClaudeTranscripts
+} from "./claude";
+import {
+  parseCodexEntry,
+  parseCodexEntries,
+  parseCodexTranscript,
+  scanCodexTranscripts
+} from "./codex";
+import {
+  parseGeminiEntries,
+  parseGeminiTranscript,
+  scanGeminiTranscripts
+} from "./gemini";
+
+// Re-export individual adapters
+export * from "./claude";
+export * from "./codex";
+export * from "./gemini";
+
+// ============================================================================
+// Adapter Registry
+// ============================================================================
+
+export const AGENT_INFO: Record<AgentType, AgentInfo> = {
+  claude: {
+    id: "claude",
+    name: "Claude Code",
+    format: "jsonl",
+    defaultPath: "~/.claude/projects",
+    supportsSubagents: true
+  },
+  codex: {
+    id: "codex",
+    name: "Codex CLI",
+    format: "jsonl",
+    defaultPath: "~/.codex/sessions",
+    supportsSubagents: false
+  },
+  gemini: {
+    id: "gemini",
+    name: "Gemini CLI",
+    format: "json",
+    defaultPath: "~/.gemini/tmp",
+    supportsSubagents: false
+  },
+  custom: {
+    id: "custom",
+    name: "Custom",
+    format: "jsonl",
+    defaultPath: "",
+    supportsSubagents: false
+  }
+};
+
+// ============================================================================
+// Auto-Detection
+// ============================================================================
+
+/**
+ * Detect agent type from file path.
+ */
+export function detectAgentFromPath(filePath: string): AgentType | null {
+  const lowerPath = filePath.toLowerCase();
+
+  if (
+    lowerPath.includes("/.claude/") ||
+    lowerPath.includes("/claude/projects/")
+  ) {
+    return "claude";
+  }
+  if (
+    lowerPath.includes("/.codex/") ||
+    lowerPath.includes("/codex/sessions/")
+  ) {
+    return "codex";
+  }
+  if (lowerPath.includes("/.gemini/") || lowerPath.includes("/gemini/tmp/")) {
+    return "gemini";
+  }
+
+  return null;
+}
+
+/**
+ * Detect agent type from transcript ID.
+ */
+export function detectAgentFromId(id: string): AgentType | null {
+  if (id.startsWith("claude:")) return "claude";
+  if (id.startsWith("codex:")) return "codex";
+  if (id.startsWith("gemini:")) return "gemini";
+  if (id.startsWith("custom:")) return "custom";
+  return null;
+}
+
+/**
+ * Detect agent type from content (first few lines).
+ */
+export function detectAgentFromContent(content: string): AgentType | null {
+  const firstLine = content.split("\n")[0]?.trim();
+  if (!firstLine) return null;
+
+  try {
+    const obj = JSON.parse(firstLine);
+
+    // Claude has uuid and type at top level
+    if (obj.uuid && obj.type && (obj.sessionId || obj.message)) {
+      return "claude";
+    }
+
+    // Codex has wrapper structure with timestamp, type, payload
+    if (obj.timestamp && obj.type && obj.payload !== undefined) {
+      return "codex";
+    }
+
+    // Gemini has sessionId, projectHash, messages array
+    if (obj.sessionId && obj.messages && Array.isArray(obj.messages)) {
+      return "gemini";
+    }
+  } catch {
+    // Not valid JSON, might be multi-line JSON (Gemini)
+    try {
+      const parsed = JSON.parse(content);
+      if (parsed.sessionId && parsed.messages) {
+        return "gemini";
+      }
+    } catch {
+      // Not parseable
+    }
+  }
+
+  return null;
+}
+
+// ============================================================================
+// Unified API
+// ============================================================================
+
+export type ParseEntriesOptions = {
+  offset?: number;
+  limit?: number;
+  includeRaw?: boolean;
+  schemaLogger?: SchemaLogger;
+};
+
+/**
+ * Parse entries from a transcript file, auto-detecting agent type.
+ */
+export async function parseEntries(
+  filePath: string,
+  agent: AgentType | null,
+  options: ParseEntriesOptions = {}
+): Promise<{ entries: UnifiedEntry[]; total: number; agent: AgentType }> {
+  // Auto-detect if not specified
+  const detectedAgent = agent ?? detectAgentFromPath(filePath);
+
+  if (!detectedAgent) {
+    throw new Error(`Could not detect agent type for: ${filePath}`);
+  }
+
+  switch (detectedAgent) {
+    case "claude": {
+      const claudeResult = await parseClaudeEntries(filePath, options);
+      return { ...claudeResult, agent: "claude" };
+    }
+
+    case "codex": {
+      const codexResult = await parseCodexEntries(filePath, options);
+      return { ...codexResult, agent: "codex" };
+    }
+
+    case "gemini": {
+      const geminiResult = await parseGeminiEntries(filePath, options);
+      return { ...geminiResult, agent: "gemini" };
+    }
+
+    default:
+      throw new Error(`Unsupported agent type: ${detectedAgent}`);
+  }
+}
+
+/**
+ * Parse transcript metadata, auto-detecting agent type.
+ */
+export async function parseTranscript(
+  filePath: string,
+  agent: AgentType | null,
+  options: { schemaLogger?: SchemaLogger; scanSubagents?: boolean } = {}
+): Promise<UnifiedTranscript | null> {
+  const detectedAgent = agent ?? detectAgentFromPath(filePath);
+
+  if (!detectedAgent) {
+    return null;
+  }
+
+  switch (detectedAgent) {
+    case "claude":
+      return parseClaudeTranscript(filePath, options);
+
+    case "codex":
+      return parseCodexTranscript(filePath, options);
+
+    case "gemini":
+      return parseGeminiTranscript(filePath, options);
+
+    default:
+      return null;
+  }
+}
+
+/**
+ * Scan a directory for transcripts of a specific agent type.
+ */
+export async function scanTranscripts(
+  basePath: string,
+  agent: AgentType,
+  options: { schemaLogger?: SchemaLogger; scanSubagents?: boolean } = {}
+): Promise<UnifiedTranscript[]> {
+  switch (agent) {
+    case "claude":
+      return scanClaudeTranscripts(basePath, options);
+
+    case "codex":
+      return scanCodexTranscripts(basePath, options);
+
+    case "gemini":
+      return scanGeminiTranscripts(basePath, options);
+
+    default:
+      return [];
+  }
+}
+
+/**
+ * Scan all configured agent directories for transcripts.
+ */
+export async function scanAllTranscripts(
+  agentPaths: Record<string, string>,
+  options: { schemaLogger?: SchemaLogger; scanSubagents?: boolean } = {}
+): Promise<{
+  transcripts: UnifiedTranscript[];
+  stats: Record<AgentType | "total", number>;
+}> {
+  const transcripts: UnifiedTranscript[] = [];
+  const stats: Record<AgentType | "total", number> = {
+    claude: 0,
+    codex: 0,
+    gemini: 0,
+    custom: 0,
+    total: 0
+  };
+
+  // Scan each agent's directory
+  for (const [agent, path] of Object.entries(agentPaths)) {
+    if (!path) continue;
+
+    const agentType = agent as AgentType;
+    const agentTranscripts = await scanTranscripts(path, agentType, options);
+
+    transcripts.push(...agentTranscripts);
+    stats[agentType] = agentTranscripts.length;
+    stats.total += agentTranscripts.length;
+  }
+
+  return { transcripts, stats };
+}
+
+/**
+ * Get transcript path from ID.
+ */
+export function getTranscriptPath(
+  id: string,
+  agentPaths: Record<string, string>,
+  transcriptIndex?: Map<string, UnifiedTranscript>
+): string | null {
+  // Check index first
+  if (transcriptIndex) {
+    const transcript = transcriptIndex.get(id);
+    if (transcript) return transcript.path;
+  }
+
+  // Parse ID to get agent and filename
+  const colonIndex = id.indexOf(":");
+  if (colonIndex === -1) return null;
+
+  const agent = id.slice(0, colonIndex) as AgentType;
+  const filename = id.slice(colonIndex + 1);
+
+  // Reconstruct path based on agent
+  const basePath = agentPaths[agent];
+  if (!basePath) return null;
+
+  // This is a best-effort reconstruction - may not be accurate for all cases
+  // The index should be used for reliable lookups
+  return null;
+}

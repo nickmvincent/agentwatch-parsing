@@ -1,0 +1,87 @@
+{
+  "sessionId": "gemini-session-001",
+  "projectHash": "abc123def456",
+  "startTime": "2024-01-15T16:00:00.000Z",
+  "lastUpdated": "2024-01-15T16:05:00.000Z",
+  "messages": [
+    {
+      "id": "msg_g001",
+      "timestamp": "2024-01-15T16:00:01.000Z",
+      "type": "user",
+      "content": "What is the capital of France?"
+    },
+    {
+      "id": "msg_g002",
+      "timestamp": "2024-01-15T16:00:05.000Z",
+      "type": "gemini",
+      "content": "The capital of France is Paris.",
+      "model": "gemini-2.0-flash",
+      "tokens": {
+        "input": 10,
+        "output": 8,
+        "total": 18
+      }
+    },
+    {
+      "id": "msg_g003",
+      "timestamp": "2024-01-15T16:01:00.000Z",
+      "type": "user",
+      "content": "Can you search for its population?"
+    },
+    {
+      "id": "msg_g004",
+      "timestamp": "2024-01-15T16:01:10.000Z",
+      "type": "gemini",
+      "content": "Based on my search, the population of Paris is approximately 2.1 million in the city proper, and about 12 million in the greater metropolitan area.",
+      "model": "gemini-2.0-flash",
+      "thoughts": [
+        {
+          "subject": "Search Planning",
+          "description": "Need to find current population statistics for Paris",
+          "timestamp": "2024-01-15T16:01:02.000Z"
+        },
+        {
+          "subject": "Data Analysis",
+          "description": "Distinguishing between city proper and metro area populations",
+          "timestamp": "2024-01-15T16:01:05.000Z"
+        }
+      ],
+      "toolCalls": [
+        {
+          "id": "tool_g001",
+          "name": "web_search",
+          "displayName": "Web Search",
+          "args": {"query": "Paris France population 2024"},
+          "result": {"summary": "Paris population: 2.1M city, 12M metro"},
+          "status": "success",
+          "timestamp": "2024-01-15T16:01:08.000Z"
+        }
+      ],
+      "tokens": {
+        "input": 25,
+        "output": 45,
+        "thoughts": 20,
+        "tool": 15,
+        "total": 105
+      }
+    },
+    {
+      "id": "msg_g005",
+      "timestamp": "2024-01-15T16:02:00.000Z",
+      "type": "user",
+      "content": "Thanks!"
+    },
+    {
+      "id": "msg_g006",
+      "timestamp": "2024-01-15T16:02:02.000Z",
+      "type": "gemini",
+      "content": "You're welcome! Let me know if you have any other questions.",
+      "model": "gemini-2.0-flash",
+      "tokens": {
+        "input": 5,
+        "output": 12,
+        "total": 17
+      }
+    }
+  ]
+}

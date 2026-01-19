@@ -1,0 +1,12 @@
+{"timestamp":"2024-01-15T14:00:00.000Z","type":"session_meta","payload":{"cwd":"/Users/dev/my-project","session_id":"sess_xyz","model":"gpt-4o"}}
+{"timestamp":"2024-01-15T14:00:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"List the files in this directory"}}
+{"timestamp":"2024-01-15T14:00:02.000Z","type":"response_item","payload":{"type":"function_call","name":"shell","call_id":"call_001","arguments":"{\"command\": \"ls -la\"}"}}
+{"timestamp":"2024-01-15T14:00:03.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_001","output":"{\"output\": \"total 32\\ndrwxr-xr-x  5 dev staff  160 Jan 15 14:00 .\\ndrwxr-xr-x 10 dev staff  320 Jan 15 13:00 ..\\n-rw-r--r--  1 dev staff 1234 Jan 15 14:00 package.json\\n-rw-r--r--  1 dev staff  567 Jan 15 14:00 index.ts\"}"}}
+{"timestamp":"2024-01-15T14:00:04.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I can see the following files in the directory:\n- package.json\n- index.ts"}]}}
+{"timestamp":"2024-01-15T14:00:05.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":120,"output_tokens":45,"cached_input_tokens":0,"total_tokens":165}}}}
+{"timestamp":"2024-01-15T14:00:10.000Z","type":"event_msg","payload":{"type":"user_message","message":"Show me the contents of package.json"}}
+{"timestamp":"2024-01-15T14:00:11.000Z","type":"response_item","payload":{"type":"reasoning","summary":[{"text":"User wants to see package.json contents"}],"encrypted_content":null}}
+{"timestamp":"2024-01-15T14:00:12.000Z","type":"response_item","payload":{"type":"function_call","name":"shell","call_id":"call_002","arguments":"{\"command\": \"cat package.json\"}"}}
+{"timestamp":"2024-01-15T14:00:13.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_002","output":"{\"output\": \"{\\n  \\\"name\\\": \\\"my-project\\\",\\n  \\\"version\\\": \\\"1.0.0\\\"\\n}\"}"}}
+{"timestamp":"2024-01-15T14:00:14.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Here's your package.json:\n\n```json\n{\n  \"name\": \"my-project\",\n  \"version\": \"1.0.0\"\n}\n```"}]}}
+{"timestamp":"2024-01-15T14:00:15.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":250,"output_tokens":80,"cached_input_tokens":50,"total_tokens":330}}}}
