@@ -17,19 +17,21 @@
  */
 
 import { readFile, stat, readdir } from "fs/promises";
-import { join, basename, dirname } from "path";
+import { join, basename } from "path";
 import type {
   UnifiedEntry,
   UnifiedTranscript,
   AgentType
-} from "../types";
-import { expandHome } from "./shared";
-import type { SchemaLogger } from "../schema-logger";
+} from "../types.js";
+import type { SchemaLogger } from "../schema-logger.js";
 import {
   accumulateEntryStats,
   createStatsAccumulator,
-  finalizeStats
-} from "./shared";
+  finalizeStats,
+  DEFAULT_MAX_JSON_FILE_BYTES,
+  expandHome,
+  normalizePathSeparators
+} from "./shared.js";
 
 const AGENT: AgentType = "gemini";
 
@@ -191,11 +193,26 @@ export async function parseGeminiEntries(
     limit?: number;
     includeRaw?: boolean;
     schemaLogger?: SchemaLogger;
+    maxFileSizeBytes?: number;
   } = {}
 ): Promise<{ entries: UnifiedEntry[]; total: number }> {
-  const { offset = 0, limit = 500, includeRaw = false, schemaLogger } = options;
+  const {
+    offset = 0,
+    limit = 500,
+    includeRaw = false,
+    schemaLogger,
+    maxFileSizeBytes
+  } = options;
   const safeOffset = Math.max(0, offset);
   const safeLimit = Math.max(0, limit);
+
+  const fileStats = await stat(filePath);
+  const maxBytes = maxFileSizeBytes ?? DEFAULT_MAX_JSON_FILE_BYTES;
+  if (fileStats.size > maxBytes) {
+    throw new Error(
+      `Gemini transcript exceeds maxFileSizeBytes (${fileStats.size} > ${maxBytes}).`
+    );
+  }
 
   const content = await readFile(filePath, "utf-8");
   let session: GeminiSession;
@@ -253,13 +270,22 @@ export async function parseGeminiTranscript(
   filePath: string,
   options: {
     schemaLogger?: SchemaLogger;
+    maxFileSizeBytes?: number;
   } = {}
 ): Promise<UnifiedTranscript | null> {
-  const { schemaLogger } = options;
+  const { schemaLogger, maxFileSizeBytes } = options;
 
   try {
     const fileStats = await stat(filePath);
     const fileName = basename(filePath, ".json");
+
+    const maxBytes = maxFileSizeBytes ?? DEFAULT_MAX_JSON_FILE_BYTES;
+    if (fileStats.size > maxBytes) {
+      throw new Error(
+        `Gemini transcript exceeds maxFileSizeBytes (${fileStats.size} > ${maxBytes}).`
+      );
+    }
+
     const content = await readFile(filePath, "utf-8");
 
     let session: GeminiSession;
@@ -309,7 +335,8 @@ export async function parseGeminiTranscript(
     }
 
     // Infer project from path (project hash is in parent directories)
-    const pathParts = filePath.split("/");
+    const normalizedPath = normalizePathSeparators(filePath);
+    const pathParts = normalizedPath.split("/");
     const tmpIndex = pathParts.indexOf("tmp");
     let projectDir: string | null = null;
     if (tmpIndex >= 0 && tmpIndex < pathParts.length - 2) {
@@ -366,9 +393,10 @@ export async function scanGeminiTranscripts(
   basePath: string,
   options: {
     schemaLogger?: SchemaLogger;
+    maxFileSizeBytes?: number;
   } = {}
 ): Promise<UnifiedTranscript[]> {
-  const { schemaLogger } = options;
+  const { schemaLogger, maxFileSizeBytes } = options;
   const expandedPath = expandHome(basePath);
   const transcripts: UnifiedTranscript[] = [];
 
@@ -387,7 +415,8 @@ export async function scanGeminiTranscripts(
 
           const filePath = join(chatsPath, file);
           const transcript = await parseGeminiTranscript(filePath, {
-            schemaLogger
+            schemaLogger,
+            maxFileSizeBytes
           });
 
           if (transcript) {

@@ -19,21 +19,20 @@ import type {
   UnifiedEntry,
   UnifiedTranscript,
   AgentType
-} from "../types";
-import type { SchemaLogger } from "../schema-logger";
+} from "../types.js";
+import type { SchemaLogger } from "../schema-logger.js";
 import {
   accumulateEntryStats,
   createStatsAccumulator,
   expandHome,
   extractTextContent,
   finalizeStats,
-  readFileChunk,
+  readJsonlLines,
   SMALL_FILE_THRESHOLD,
   type TextBlockRule
-} from "./shared";
+} from "./shared.js";
 
 const AGENT: AgentType = "codex";
-const CHUNK_SIZE = 64 * 1024;
 
 // ============================================================================
 // Stats Accumulation
@@ -168,16 +167,15 @@ function extractTokenUsage(
 }
 
 /**
- * Parse a single Codex JSONL entry into a UnifiedEntry.
+ * Parse a Codex JSON object into a UnifiedEntry.
  */
-export function parseCodexEntry(
-  line: string,
+function parseCodexEntryObject(
+  obj: Record<string, unknown>,
   index: number,
   transcriptPath: string,
   schemaLogger?: SchemaLogger
 ): UnifiedEntry | null {
   try {
-    const obj = JSON.parse(line) as Record<string, unknown>;
     const timestamp = obj.timestamp as string | undefined;
     const entryType = obj.type as string;
     const payload = (obj.payload ?? {}) as Record<string, unknown>;
@@ -281,6 +279,31 @@ export function parseCodexEntry(
       entryIndex: index,
       issueType: "parse_error",
       description: `Failed to parse JSONL line: ${error instanceof Error ? error.message : String(error)}`,
+      rawEntry: obj
+    });
+    return null;
+  }
+}
+
+/**
+ * Parse a single Codex JSONL entry into a UnifiedEntry.
+ */
+export function parseCodexEntry(
+  line: string,
+  index: number,
+  transcriptPath: string,
+  schemaLogger?: SchemaLogger
+): UnifiedEntry | null {
+  try {
+    const obj = JSON.parse(line) as Record<string, unknown>;
+    return parseCodexEntryObject(obj, index, transcriptPath, schemaLogger);
+  } catch (error) {
+    schemaLogger?.log({
+      agent: AGENT,
+      transcriptPath,
+      entryIndex: index,
+      issueType: "parse_error",
+      description: `Failed to parse JSONL line: ${error instanceof Error ? error.message : String(error)}`,
       rawEntry: line
     });
     return null;
@@ -298,18 +321,31 @@ export async function parseCodexEntries(
     limit?: number;
     includeRaw?: boolean;
     schemaLogger?: SchemaLogger;
+    maxFileSizeBytes?: number;
   } = {}
 ): Promise<{ entries: UnifiedEntry[]; total: number }> {
-  const { offset = 0, limit = 500, includeRaw = false, schemaLogger } = options;
+  const {
+    offset = 0,
+    limit = 500,
+    includeRaw = false,
+    schemaLogger,
+    maxFileSizeBytes
+  } = options;
   const safeOffset = Math.max(0, offset);
   const safeLimit = Math.max(0, limit);
 
   const fileStats = await stat(filePath);
   const fileSize = fileStats.size;
-  const content = await readFile(filePath, "utf-8");
+
+  if (maxFileSizeBytes !== undefined && fileSize > maxFileSizeBytes) {
+    throw new Error(
+      `Codex transcript exceeds maxFileSizeBytes (${fileSize} > ${maxFileSizeBytes}).`
+    );
+  }
 
   // For small files, use simple full-file approach
   if (fileSize < SMALL_FILE_THRESHOLD) {
+    const content = await readFile(filePath, "utf-8");
     const lines = content.split("\n").filter((line) => line.trim());
     const total = lines.length;
 
@@ -340,51 +376,29 @@ export async function parseCodexEntries(
     return { entries, total };
   }
 
-  // For large files, single pass: count lines and collect only the ones we need
-  const lines: string[] = [];
-  let lineStart = 0;
-  let lineIndex = 0;
-  let total = 0;
-
-  for (let i = 0; i <= content.length; i++) {
-    if (i === content.length || content[i] === "\n") {
-      const line = content.slice(lineStart, i).trim();
-      if (line) {
-        // Only store lines within our pagination window
-        if (
-          lineIndex >= safeOffset &&
-          lineIndex < safeOffset + safeLimit
-        ) {
-          lines.push(line);
-        }
-        lineIndex++;
-        total++;
-      }
-      lineStart = i + 1;
-    }
-  }
-
   const entries: UnifiedEntry[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    const entry = parseCodexEntry(
-      lines[i],
-      safeOffset + i,
-      filePath,
-      schemaLogger
-    );
-    if (entry) {
-      if (!includeRaw) {
-        delete entry._raw;
-      } else {
-        try {
-          entry._raw = JSON.parse(lines[i]);
-        } catch {
-          // Already parsed successfully in parseCodexEntry, but protect against edge cases
-        }
+  const { total } = await readJsonlLines(
+    filePath,
+    (line, lineIndex) => {
+      if (lineIndex < safeOffset || lineIndex >= safeOffset + safeLimit) {
+        return;
       }
-      entries.push(entry);
+
+      const entry = parseCodexEntry(line, lineIndex, filePath, schemaLogger);
+      if (entry) {
+        if (!includeRaw) {
+          delete entry._raw;
+        } else {
+          try {
+            entry._raw = JSON.parse(line);
+          } catch {
+            // Already parsed successfully in parseCodexEntry, but protect against edge cases
+          }
+        }
+        entries.push(entry);
+      }
     }
-  }
+  );
 
   return { entries, total };
 }
@@ -400,13 +414,20 @@ export async function parseCodexTranscript(
   filePath: string,
   options: {
     schemaLogger?: SchemaLogger;
+    maxFileSizeBytes?: number;
   } = {}
 ): Promise<UnifiedTranscript | null> {
-  const { schemaLogger } = options;
+  const { schemaLogger, maxFileSizeBytes } = options;
 
   try {
     const fileStats = await stat(filePath);
     const fileName = basename(filePath, ".jsonl");
+
+    if (maxFileSizeBytes !== undefined && fileStats.size > maxFileSizeBytes) {
+      throw new Error(
+        `Codex transcript exceeds maxFileSizeBytes (${fileStats.size} > ${maxFileSizeBytes}).`
+      );
+    }
 
     let startTime: number | null = null;
     let endTime: number | null = null;
@@ -416,149 +437,59 @@ export async function parseCodexTranscript(
 
     // Stats accumulator
     const statsAcc = createStatsAccumulator();
-    const fileSize = fileStats.size;
 
     // Parse date from filename (rollout-YYYY-MM-DDTHH-mm-ss-...)
     const dateMatch = fileName.match(
       /rollout-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})/
     );
     if (dateMatch) {
-      const dateStr = dateMatch[1].replace(/-/g, (m, i) => (i > 9 ? ":" : m));
-      const parsed = new Date(dateStr.replace("T", "T").replace(/-/g, ":"));
-      if (!Number.isNaN(parsed.getTime())) {
-        startTime = parsed.getTime();
-      }
+      const normalized = dateMatch[1].replace(
+        /(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})/,
+        "$1-$2-$3T$4:$5:$6"
+      );
+      const parsed = new Date(normalized);
+      if (!Number.isNaN(parsed.getTime())) startTime = parsed.getTime();
     }
 
-    if (fileSize <= SMALL_FILE_THRESHOLD) {
-      const content = await readFile(filePath, "utf-8");
-      const lines = content.split("\n").filter((l) => l.trim());
+    await readJsonlLines(filePath, (line, lineIndex) => {
+      entryCount++;
 
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        try {
-          const obj = JSON.parse(line);
-          entryCount++;
+      let obj: Record<string, unknown>;
+      try {
+        obj = JSON.parse(line) as Record<string, unknown>;
+      } catch {
+        return;
+      }
 
-          const entry = parseCodexEntry(
-            line,
-            i,
-            filePath,
-            schemaLogger
-          );
-          if (entry) {
-            accumulateEntryStats(statsAcc, entry);
-          }
-
-          if (obj.type === "session_meta" && obj.payload) {
-            const cwd = obj.payload.cwd as string | undefined;
-            if (cwd) {
-              projectDir = cwd;
-              name = basename(cwd);
-            }
-          }
-
-          const ts = obj.timestamp as string | undefined;
-          if (ts) {
-            const time = new Date(ts).getTime();
-            if (!Number.isNaN(time)) {
-              if (!startTime || time < startTime) startTime = time;
-              if (!endTime || time > endTime) endTime = time;
-            }
-          }
-        } catch {
-          // Skip malformed lines
+      if (obj.type === "session_meta" && obj.payload) {
+        const cwd = (obj.payload as Record<string, unknown>).cwd as
+          | string
+          | undefined;
+        if (cwd) {
+          projectDir = cwd;
+          name = basename(cwd);
         }
       }
-    } else {
-      let lineIndex = 0;
 
-      const firstChunkSize = Math.min(CHUNK_SIZE, fileSize);
-      const firstChunk = await readFileChunk(
+      const ts = obj.timestamp as string | undefined;
+      if (ts) {
+        const time = new Date(ts).getTime();
+        if (!Number.isNaN(time)) {
+          if (!startTime || time < startTime) startTime = time;
+          if (!endTime || time > endTime) endTime = time;
+        }
+      }
+
+      const entry = parseCodexEntryObject(
+        obj,
+        lineIndex,
         filePath,
-        0,
-        firstChunkSize
+        schemaLogger
       );
-      const firstLines = firstChunk.split("\n").filter((l) => l.trim());
-
-      for (const line of firstLines.slice(0, 50)) {
-        try {
-          const obj = JSON.parse(line);
-          entryCount++;
-
-          const entry = parseCodexEntry(
-            line,
-            lineIndex++,
-            filePath,
-            schemaLogger
-          );
-          if (entry) {
-            accumulateEntryStats(statsAcc, entry);
-          }
-
-          if (obj.type === "session_meta" && obj.payload) {
-            const cwd = obj.payload.cwd as string | undefined;
-            if (cwd) {
-              projectDir = cwd;
-              name = basename(cwd);
-            }
-          }
-
-          const ts = obj.timestamp as string | undefined;
-          if (ts) {
-            const time = new Date(ts).getTime();
-            if (!Number.isNaN(time)) {
-              if (!startTime || time < startTime) startTime = time;
-            }
-          }
-        } catch {
-          // Skip malformed lines
-        }
+      if (entry) {
+        accumulateEntryStats(statsAcc, entry);
       }
-
-      const lastChunkStart = Math.max(0, fileSize - CHUNK_SIZE);
-      const lastChunk = await readFileChunk(
-        filePath,
-        lastChunkStart,
-        CHUNK_SIZE
-      );
-      const lastLines = lastChunk
-        .split("\n")
-        .slice(1)
-        .filter((l) => l.trim());
-
-      for (const line of lastLines.slice(-50)) {
-        try {
-          const obj = JSON.parse(line);
-          entryCount++;
-
-          const entry = parseCodexEntry(
-            line,
-            lineIndex++,
-            filePath,
-            schemaLogger
-          );
-          if (entry) {
-            accumulateEntryStats(statsAcc, entry);
-          }
-
-          const ts = obj.timestamp as string | undefined;
-          if (ts) {
-            const time = new Date(ts).getTime();
-            if (!Number.isNaN(time) && (!endTime || time > endTime)) {
-              endTime = time;
-            }
-          }
-        } catch {
-          // Skip
-        }
-      }
-
-      const estimatedCount = Math.round(fileSize / 500);
-      if (estimatedCount > entryCount) {
-        entryCount = estimatedCount;
-      }
-    }
+    });
 
     // Finalize stats
     const transcriptStats = finalizeStats(statsAcc, startTime, endTime);
@@ -601,9 +532,10 @@ export async function scanCodexTranscripts(
   basePath: string,
   options: {
     schemaLogger?: SchemaLogger;
+    maxFileSizeBytes?: number;
   } = {}
 ): Promise<UnifiedTranscript[]> {
-  const { schemaLogger } = options;
+  const { schemaLogger, maxFileSizeBytes } = options;
   const expandedPath = expandHome(basePath);
   const transcripts: UnifiedTranscript[] = [];
 
@@ -619,7 +551,8 @@ export async function scanCodexTranscripts(
           await scanDirectory(fullPath, depth + 1);
         } else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
           const transcript = await parseCodexTranscript(fullPath, {
-            schemaLogger
+            schemaLogger,
+            maxFileSizeBytes
           });
           if (transcript) {
             transcripts.push(transcript);

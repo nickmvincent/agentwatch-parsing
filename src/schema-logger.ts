@@ -5,7 +5,7 @@
  * and identify when formats change.
  */
 
-import type { SchemaIssue, SchemaLogger, SchemaLoggerInput } from "./types";
+import type { SchemaIssue, SchemaLogger, SchemaLoggerInput } from "./types.js";
 
 export type { SchemaLogger, SchemaLoggerInput };
 

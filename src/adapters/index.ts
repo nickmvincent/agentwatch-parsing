@@ -7,8 +7,8 @@ import type {
   UnifiedTranscript,
   AgentType,
   AgentInfo
-} from "../types";
-import type { SchemaLogger } from "../schema-logger";
+} from "../types.js";
+import type { SchemaLogger } from "../schema-logger.js";
 
 // Import adapters
 import {
@@ -16,23 +16,24 @@ import {
   parseClaudeEntries,
   parseClaudeTranscript,
   scanClaudeTranscripts
-} from "./claude";
+} from "./claude.js";
 import {
   parseCodexEntry,
   parseCodexEntries,
   parseCodexTranscript,
   scanCodexTranscripts
-} from "./codex";
+} from "./codex.js";
 import {
   parseGeminiEntries,
   parseGeminiTranscript,
   scanGeminiTranscripts
-} from "./gemini";
+} from "./gemini.js";
+import { normalizePathSeparators } from "./shared.js";
 
 // Re-export individual adapters
-export * from "./claude";
-export * from "./codex";
-export * from "./gemini";
+export * from "./claude.js";
+export * from "./codex.js";
+export * from "./gemini.js";
 
 // ============================================================================
 // Adapter Registry
@@ -77,7 +78,7 @@ export const AGENT_INFO: Record<AgentType, AgentInfo> = {
  * Detect agent type from file path.
  */
 export function detectAgentFromPath(filePath: string): AgentType | null {
-  const lowerPath = filePath.toLowerCase();
+  const lowerPath = normalizePathSeparators(filePath).toLowerCase();
 
   if (
     lowerPath.includes("/.claude/") ||
@@ -157,6 +158,7 @@ export type ParseEntriesOptions = {
   limit?: number;
   includeRaw?: boolean;
   schemaLogger?: SchemaLogger;
+  maxFileSizeBytes?: number;
 };
 
 const SUPPORTED_AGENTS = ["claude", "codex", "gemini"] as const;
@@ -211,7 +213,11 @@ export async function parseEntries(
 export async function parseTranscript(
   filePath: string,
   agent: AgentType | null,
-  options: { schemaLogger?: SchemaLogger; scanSubagents?: boolean } = {}
+  options: {
+    schemaLogger?: SchemaLogger;
+    scanSubagents?: boolean;
+    maxFileSizeBytes?: number;
+  } = {}
 ): Promise<UnifiedTranscript> {
   const detectedAgent = agent ?? detectAgentFromPath(filePath);
 
@@ -258,7 +264,11 @@ export async function parseTranscript(
 export async function scanTranscripts(
   basePath: string,
   agent: AgentType,
-  options: { schemaLogger?: SchemaLogger; scanSubagents?: boolean } = {}
+  options: {
+    schemaLogger?: SchemaLogger;
+    scanSubagents?: boolean;
+    maxFileSizeBytes?: number;
+  } = {}
 ): Promise<UnifiedTranscript[]> {
   switch (agent) {
     case "claude":
@@ -287,7 +297,11 @@ export async function scanTranscripts(
  */
 export async function scanAllTranscripts(
   agentPaths: Record<string, string>,
-  options: { schemaLogger?: SchemaLogger; scanSubagents?: boolean } = {}
+  options: {
+    schemaLogger?: SchemaLogger;
+    scanSubagents?: boolean;
+    maxFileSizeBytes?: number;
+  } = {}
 ): Promise<{
   transcripts: UnifiedTranscript[];
   stats: Record<AgentType | "total", number>;
@@ -315,4 +329,3 @@ export async function scanAllTranscripts(
 
   return { transcripts, stats };
 }
-

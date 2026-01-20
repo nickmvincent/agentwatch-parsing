@@ -3,13 +3,19 @@
  */
 
 import { open } from "fs/promises";
-import type { TranscriptStats, UnifiedEntry } from "../types";
+import type { TranscriptStats, UnifiedEntry } from "../types.js";
 
 /**
  * File size threshold for switching from simple full-file read to streaming.
  * Files smaller than this are read entirely into memory for parsing.
  */
 export const SMALL_FILE_THRESHOLD = 1024 * 1024; // 1MB
+export const JSONL_STREAM_CHUNK_SIZE = 64 * 1024; // 64KB
+
+/**
+ * JSON transcripts must be loaded into memory, so cap size by default.
+ */
+export const DEFAULT_MAX_JSON_FILE_BYTES = 50 * 1024 * 1024; // 50MB
 
 export type StatsAccumulator = {
   tokens: { input: number; output: number; cached: number; total: number };
@@ -96,11 +102,18 @@ export function extractTextContent(
  * Expand ~ to home directory
  */
 export function expandHome(path: string): string {
-  if (path.startsWith("~/")) {
+  if (path.startsWith("~/") || path.startsWith("~\\")) {
     const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
-    return path.replace("~", home);
+    return `${home}${path.slice(1)}`;
   }
   return path;
+}
+
+/**
+ * Normalize Windows backslashes to forward slashes for matching.
+ */
+export function normalizePathSeparators(value: string): string {
+  return value.replace(/\\/g, "/");
 }
 
 /**
@@ -110,6 +123,60 @@ export function createId(prefix: string): string {
   const timestamp = Date.now().toString(36);
   const random = Math.random().toString(36).slice(2, 8);
   return `${prefix}_${timestamp}_${random}`;
+}
+
+/**
+ * Stream JSONL lines without loading the full file into memory.
+ */
+export async function readJsonlLines(
+  filePath: string,
+  onLine: (line: string, lineIndex: number) => Promise<void> | void,
+  options: { chunkSize?: number } = {}
+): Promise<{ total: number }> {
+  const chunkSize = options.chunkSize ?? JSONL_STREAM_CHUNK_SIZE;
+  const handle = await open(filePath, "r");
+  let leftover = "";
+  let lineIndex = 0;
+  let total = 0;
+  let position = 0;
+
+  try {
+    const buffer = Buffer.allocUnsafe(chunkSize);
+
+    while (true) {
+      const { bytesRead } = await handle.read(
+        buffer,
+        0,
+        buffer.length,
+        position
+      );
+      if (!bytesRead) break;
+
+      position += bytesRead;
+      const chunk = leftover + buffer.toString("utf-8", 0, bytesRead);
+      const lines = chunk.split("\n");
+      leftover = lines.pop() ?? "";
+
+      for (const rawLine of lines) {
+        const trimmed = rawLine.trim();
+        if (!trimmed) continue;
+        await onLine(trimmed, lineIndex);
+        lineIndex++;
+        total++;
+      }
+    }
+
+    const finalLine = leftover.trim();
+    if (finalLine) {
+      await onLine(finalLine, lineIndex);
+      lineIndex++;
+      total++;
+    }
+  } finally {
+    await handle.close();
+  }
+
+  return { total };
 }
 
 /**

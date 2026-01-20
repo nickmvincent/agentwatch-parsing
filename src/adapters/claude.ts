@@ -24,21 +24,21 @@ import type {
   ExtendedToolCall,
   FullParseResult,
   ExtendedTokenUsage
-} from "../types";
-import type { SchemaLogger } from "../schema-logger";
+} from "../types.js";
+import type { SchemaLogger } from "../schema-logger.js";
 import {
   accumulateEntryStats,
   createStatsAccumulator,
   expandHome,
   extractTextContent,
   finalizeStats,
-  readFileChunk,
+  normalizePathSeparators,
+  readJsonlLines,
   SMALL_FILE_THRESHOLD,
   type TextBlockRule
-} from "./shared";
+} from "./shared.js";
 
 const AGENT: AgentType = "claude";
-const CHUNK_SIZE = 64 * 1024; // 64KB chunks for efficient file reading
 
 // ============================================================================
 // Stats Accumulation
@@ -181,16 +181,15 @@ function extractTokenUsage(
 }
 
 /**
- * Parse a single Claude JSONL entry into a UnifiedEntry.
+ * Parse a Claude JSON object into a UnifiedEntry.
  */
-export function parseClaudeEntry(
-  line: string,
+function parseClaudeEntryObject(
+  obj: Record<string, unknown>,
   index: number,
   transcriptPath: string,
   schemaLogger?: SchemaLogger
 ): UnifiedEntry | null {
   try {
-    const obj = JSON.parse(line) as Record<string, unknown>;
     const entryType = detectEntryType(obj);
     const message = obj.message as Record<string, unknown> | undefined;
 
@@ -266,6 +265,31 @@ export function parseClaudeEntry(
       entryIndex: index,
       issueType: "parse_error",
       description: `Failed to parse JSONL line: ${error instanceof Error ? error.message : String(error)}`,
+      rawEntry: obj
+    });
+    return null;
+  }
+}
+
+/**
+ * Parse a single Claude JSONL entry into a UnifiedEntry.
+ */
+export function parseClaudeEntry(
+  line: string,
+  index: number,
+  transcriptPath: string,
+  schemaLogger?: SchemaLogger
+): UnifiedEntry | null {
+  try {
+    const obj = JSON.parse(line) as Record<string, unknown>;
+    return parseClaudeEntryObject(obj, index, transcriptPath, schemaLogger);
+  } catch (error) {
+    schemaLogger?.log({
+      agent: AGENT,
+      transcriptPath,
+      entryIndex: index,
+      issueType: "parse_error",
+      description: `Failed to parse JSONL line: ${error instanceof Error ? error.message : String(error)}`,
       rawEntry: line
     });
     return null;
@@ -283,18 +307,31 @@ export async function parseClaudeEntries(
     limit?: number;
     includeRaw?: boolean;
     schemaLogger?: SchemaLogger;
+    maxFileSizeBytes?: number;
   } = {}
 ): Promise<{ entries: UnifiedEntry[]; total: number }> {
-  const { offset = 0, limit = 500, includeRaw = false, schemaLogger } = options;
+  const {
+    offset = 0,
+    limit = 500,
+    includeRaw = false,
+    schemaLogger,
+    maxFileSizeBytes
+  } = options;
   const safeOffset = Math.max(0, offset);
   const safeLimit = Math.max(0, limit);
 
   const fileStats = await stat(filePath);
   const fileSize = fileStats.size;
-  const content = await readFile(filePath, "utf-8");
+
+  if (maxFileSizeBytes !== undefined && fileSize > maxFileSizeBytes) {
+    throw new Error(
+      `Claude transcript exceeds maxFileSizeBytes (${fileSize} > ${maxFileSizeBytes}).`
+    );
+  }
 
   // For small files, use simple full-file approach
   if (fileSize < SMALL_FILE_THRESHOLD) {
+    const content = await readFile(filePath, "utf-8");
     const lines = content.split("\n").filter((line) => line.trim());
     const total = lines.length;
 
@@ -321,48 +358,29 @@ export async function parseClaudeEntries(
     return { entries, total };
   }
 
-  // For large files, stream and count lines efficiently
-  const lines: string[] = [];
-  let lineStart = 0;
-  let lineIndex = 0;
-  let total = 0;
-
-  // Single pass: count lines and collect only the ones we need
-  for (let i = 0; i <= content.length; i++) {
-    if (i === content.length || content[i] === "\n") {
-      const line = content.slice(lineStart, i).trim();
-      if (line) {
-        // Only store lines within our pagination window
-        if (
-          lineIndex >= safeOffset &&
-          lineIndex < safeOffset + safeLimit
-        ) {
-          lines.push(line);
-        }
-        lineIndex++;
-        total++;
-      }
-      lineStart = i + 1;
-    }
-  }
-
   const entries: UnifiedEntry[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    const entry = parseClaudeEntry(
-      lines[i],
-      safeOffset + i,
-      filePath,
-      schemaLogger
-    );
-    if (entry) {
-      if (!includeRaw) {
-        delete entry._raw;
-      } else {
-        entry._raw = JSON.parse(lines[i]);
+  const { total } = await readJsonlLines(
+    filePath,
+    (line, lineIndex) => {
+      if (lineIndex < safeOffset || lineIndex >= safeOffset + safeLimit) {
+        return;
       }
-      entries.push(entry);
+
+      const entry = parseClaudeEntry(line, lineIndex, filePath, schemaLogger);
+      if (entry) {
+        if (!includeRaw) {
+          delete entry._raw;
+        } else {
+          try {
+            entry._raw = JSON.parse(line);
+          } catch {
+            // Ignore raw parse failures for already-parsed entries
+          }
+        }
+        entries.push(entry);
+      }
     }
-  }
+  );
 
   return { entries, total };
 }
@@ -379,13 +397,20 @@ export async function parseClaudeTranscript(
   options: {
     schemaLogger?: SchemaLogger;
     scanSubagents?: boolean;
+    maxFileSizeBytes?: number;
   } = {}
 ): Promise<UnifiedTranscript | null> {
-  const { schemaLogger, scanSubagents = true } = options;
+  const { schemaLogger, scanSubagents = true, maxFileSizeBytes } = options;
 
   try {
     const fileStats = await stat(filePath);
     const fileName = basename(filePath, ".jsonl");
+
+    if (maxFileSizeBytes !== undefined && fileStats.size > maxFileSizeBytes) {
+      throw new Error(
+        `Claude transcript exceeds maxFileSizeBytes (${fileStats.size} > ${maxFileSizeBytes}).`
+      );
+    }
 
     let startTime: number | null = null;
     let endTime: number | null = null;
@@ -396,7 +421,6 @@ export async function parseClaudeTranscript(
 
     // Stats accumulator
     const statsAcc = createStatsAccumulator();
-    const fileSize = fileStats.size;
 
     // Infer project directory from path
     const parentDir = basename(dirname(filePath));
@@ -405,148 +429,53 @@ export async function parseClaudeTranscript(
       name = basename(projectDir);
     }
 
-    if (fileSize <= SMALL_FILE_THRESHOLD) {
-      const content = await readFile(filePath, "utf-8");
-      const lines = content.split("\n").filter((l) => l.trim());
+    await readJsonlLines(filePath, (line, lineIndex) => {
+      entryCount++;
 
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        try {
-          const obj = JSON.parse(line);
-          entryCount++;
+      let obj: Record<string, unknown>;
+      try {
+        obj = JSON.parse(line) as Record<string, unknown>;
+      } catch {
+        return;
+      }
 
-          const entry = parseClaudeEntry(
-            line,
-            i,
-            filePath,
-            schemaLogger
-          );
-          if (entry) {
-            accumulateEntryStats(statsAcc, entry);
-          }
+      if (obj.type === "summary" && obj.summary) {
+        name = String(obj.summary).slice(0, 60);
+      }
 
-          if (obj.type === "summary" && obj.summary) {
-            name = obj.summary.slice(0, 60);
-          }
-
-          const ts = obj.timestamp || obj.ts;
-          if (ts) {
-            const time =
-              typeof ts === "number" ? ts * 1000 : new Date(ts).getTime();
-            if (!Number.isNaN(time)) {
-              if (!startTime || time < startTime) startTime = time;
-              if (!endTime || time > endTime) endTime = time;
-            }
-          }
-        } catch {
-          // Skip malformed lines
+      const ts = obj.timestamp ?? obj.ts;
+      if (ts) {
+        const time =
+          typeof ts === "number" ? ts * 1000 : new Date(ts as string).getTime();
+        if (!Number.isNaN(time)) {
+          if (!startTime || time < startTime) startTime = time;
+          if (!endTime || time > endTime) endTime = time;
         }
       }
-    } else {
-      let lineIndex = 0;
 
-      const firstChunkSize = Math.min(CHUNK_SIZE, fileSize);
-      const firstChunk = await readFileChunk(
+      const entry = parseClaudeEntryObject(
+        obj,
+        lineIndex,
         filePath,
-        0,
-        firstChunkSize
+        schemaLogger
       );
-      const firstLines = firstChunk.split("\n").filter((l) => l.trim());
-
-      for (const line of firstLines.slice(0, 50)) {
-        try {
-          const obj = JSON.parse(line);
-          entryCount++;
-
-          const entry = parseClaudeEntry(
-            line,
-            lineIndex++,
-            filePath,
-            schemaLogger
-          );
-          if (entry) {
-            accumulateEntryStats(statsAcc, entry);
-          }
-
-          if (obj.type === "summary" && obj.summary) {
-            name = obj.summary.slice(0, 60);
-            continue;
-          }
-
-          const ts = obj.timestamp || obj.ts;
-          if (ts) {
-            const time =
-              typeof ts === "number" ? ts * 1000 : new Date(ts).getTime();
-            if (!Number.isNaN(time) && (!startTime || time < startTime)) {
-              startTime = time;
-            }
-          }
-        } catch {
-          // Skip malformed lines
-        }
+      if (entry) {
+        accumulateEntryStats(statsAcc, entry);
       }
-
-      const lastChunkStart = Math.max(0, fileSize - CHUNK_SIZE);
-      const lastChunk = await readFileChunk(
-        filePath,
-        lastChunkStart,
-        CHUNK_SIZE
-      );
-      const lastLines = lastChunk
-        .split("\n")
-        .slice(1) // Skip potential partial first line
-        .filter((l) => l.trim());
-
-      for (const line of lastLines.slice(-50)) {
-        try {
-          const obj = JSON.parse(line);
-          entryCount++;
-
-          const entry = parseClaudeEntry(
-            line,
-            lineIndex++,
-            filePath,
-            schemaLogger
-          );
-          if (entry) {
-            accumulateEntryStats(statsAcc, entry);
-          }
-
-          if (obj.type === "summary" && obj.summary) {
-            name = obj.summary.slice(0, 60);
-            continue;
-          }
-
-          const ts = obj.timestamp || obj.ts;
-          if (ts) {
-            const time =
-              typeof ts === "number" ? ts * 1000 : new Date(ts).getTime();
-            if (!Number.isNaN(time) && (!endTime || time > endTime)) {
-              endTime = time;
-            }
-          }
-        } catch {
-          // Skip malformed lines
-        }
-      }
-
-      const estimatedCount = Math.round(fileSize / 800);
-      if (estimatedCount > entryCount) {
-        entryCount = estimatedCount;
-      }
-    }
+    });
 
     // Finalize stats
     const transcriptStats = finalizeStats(statsAcc, startTime, endTime);
 
     // Check for subagents
     let subagents: UnifiedTranscript[] | undefined;
-    const isSubagent = filePath.includes("/subagents/");
+    const normalizedPath = normalizePathSeparators(filePath);
+    const isSubagent = normalizedPath.includes("/subagents/");
     let parentTranscriptId: string | undefined;
 
     if (isSubagent) {
       // Extract parent transcript ID from path
-      const pathParts = filePath.split("/");
+      const pathParts = normalizedPath.split("/");
       const subagentsIndex = pathParts.indexOf("subagents");
       if (subagentsIndex > 0) {
         const parentFileName = pathParts[subagentsIndex - 1];
@@ -563,7 +492,8 @@ export async function parseClaudeTranscript(
             const subPath = join(subagentsDir, subFile);
             const subTranscript = await parseClaudeTranscript(subPath, {
               schemaLogger,
-              scanSubagents: false
+              scanSubagents: false,
+              maxFileSizeBytes
             });
             if (subTranscript) {
               subTranscript.parentTranscriptId = `claude:${fileName}`;
@@ -620,9 +550,10 @@ export async function scanClaudeTranscripts(
   options: {
     schemaLogger?: SchemaLogger;
     scanSubagents?: boolean;
+    maxFileSizeBytes?: number;
   } = {}
 ): Promise<UnifiedTranscript[]> {
-  const { schemaLogger, scanSubagents = true } = options;
+  const { schemaLogger, scanSubagents = true, maxFileSizeBytes } = options;
   const expandedPath = expandHome(basePath);
   const transcripts: UnifiedTranscript[] = [];
 
@@ -644,7 +575,8 @@ export async function scanClaudeTranscripts(
         const filePath = join(projectPath, file);
         const transcript = await parseClaudeTranscript(filePath, {
           schemaLogger,
-          scanSubagents
+          scanSubagents,
+          maxFileSizeBytes
         });
 
         if (transcript) {

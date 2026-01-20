@@ -20,11 +20,11 @@
  */
 
 // Types
-export * from "./types";
+export * from "./types.js";
 
 // Schema logger
-export { createSchemaLogger } from "./schema-logger";
-export type { SchemaLoggerOptions } from "./schema-logger";
+export { createSchemaLogger } from "./schema-logger.js";
+export type { SchemaLoggerOptions } from "./schema-logger.js";
 
 // Adapters - unified API
 export {
@@ -36,7 +36,7 @@ export {
   detectAgentFromId,
   detectAgentFromContent,
   AGENT_INFO
-} from "./adapters";
+} from "./adapters/index.js";
 
 // Individual adapters for direct use
 export {
@@ -44,20 +44,20 @@ export {
   parseClaudeEntries,
   parseClaudeTranscript,
   scanClaudeTranscripts
-} from "./adapters/claude";
+} from "./adapters/claude.js";
 
 export {
   parseCodexEntry,
   parseCodexEntries,
   parseCodexTranscript,
   scanCodexTranscripts
-} from "./adapters/codex";
+} from "./adapters/codex.js";
 
 export {
   parseGeminiEntries,
   parseGeminiTranscript,
   scanGeminiTranscripts
-} from "./adapters/gemini";
+} from "./adapters/gemini.js";
 
 // Shared utilities
 export {
@@ -67,4 +67,4 @@ export {
   extractTextContent,
   expandHome,
   createId
-} from "./adapters/shared";
+} from "./adapters/shared.js";
