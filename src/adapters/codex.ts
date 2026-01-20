@@ -20,13 +20,14 @@ import type {
   UnifiedTranscript,
   AgentType
 } from "../types";
-import { expandHome } from "./shared";
 import type { SchemaLogger } from "../schema-logger";
 import {
   accumulateEntryStats,
   createStatsAccumulator,
+  expandHome,
   extractTextContent,
   finalizeStats,
+  SMALL_FILE_THRESHOLD,
   type TextBlockRule
 } from "./shared";
 
@@ -303,8 +304,8 @@ export async function parseCodexEntries(
   const file = Bun.file(filePath);
   const fileSize = file.size;
 
-  // For small files (< 1MB), use simple full-file approach
-  if (fileSize < 1024 * 1024) {
+  // For small files, use simple full-file approach
+  if (fileSize < SMALL_FILE_THRESHOLD) {
     const content = await file.text();
     const lines = content.split("\n").filter((line) => line.trim());
     const total = lines.length;

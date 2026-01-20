@@ -307,34 +307,3 @@ export type FullParseResult = z.infer<typeof FullParseResultSchema>;
 // ============================================================================
 
 export const TRANSCRIPT_SCHEMA_VERSION = "v2" as const;
-
-export const AGENT_INFO: Record<AgentType, AgentInfo> = {
-  claude: {
-    id: "claude",
-    name: "Claude",
-    format: "jsonl",
-    defaultPath: "~/.claude/projects",
-    supportsSubagents: true
-  },
-  codex: {
-    id: "codex",
-    name: "Codex",
-    format: "jsonl",
-    defaultPath: "~/.codex/sessions",
-    supportsSubagents: false
-  },
-  gemini: {
-    id: "gemini",
-    name: "Gemini",
-    format: "json",
-    defaultPath: "~/.gemini/sessions",
-    supportsSubagents: false
-  },
-  custom: {
-    id: "custom",
-    name: "Custom",
-    format: "jsonl",
-    defaultPath: "",
-    supportsSubagents: false
-  }
-};

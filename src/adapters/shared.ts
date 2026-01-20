@@ -4,6 +4,12 @@
 
 import type { TranscriptStats, UnifiedEntry } from "../types";
 
+/**
+ * File size threshold for switching from simple full-file read to streaming.
+ * Files smaller than this are read entirely into memory for parsing.
+ */
+export const SMALL_FILE_THRESHOLD = 1024 * 1024; // 1MB
+
 export type StatsAccumulator = {
   tokens: { input: number; output: number; cached: number; total: number };
   entryTypes: Record<string, number>;

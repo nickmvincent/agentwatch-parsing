@@ -159,8 +159,11 @@ export type ParseEntriesOptions = {
   schemaLogger?: SchemaLogger;
 };
 
+const SUPPORTED_AGENTS = ["claude", "codex", "gemini"] as const;
+
 /**
  * Parse entries from a transcript file, auto-detecting agent type.
+ * @throws Error if agent type cannot be detected and is not specified
  */
 export async function parseEntries(
   filePath: string,
@@ -171,7 +174,10 @@ export async function parseEntries(
   const detectedAgent = agent ?? detectAgentFromPath(filePath);
 
   if (!detectedAgent) {
-    throw new Error(`Could not detect agent type for: ${filePath}`);
+    throw new Error(
+      `Could not detect agent type for: ${filePath}. ` +
+      `Specify agent explicitly as one of: ${SUPPORTED_AGENTS.join(", ")}`
+    );
   }
 
   switch (detectedAgent) {
@@ -191,41 +197,63 @@ export async function parseEntries(
     }
 
     default:
-      throw new Error(`Unsupported agent type: ${detectedAgent}`);
+      throw new Error(
+        `Unsupported agent type: "${detectedAgent}". ` +
+        `Supported agents: ${SUPPORTED_AGENTS.join(", ")}`
+      );
   }
 }
 
 /**
  * Parse transcript metadata, auto-detecting agent type.
+ * @throws Error if agent type cannot be detected and is not specified
  */
 export async function parseTranscript(
   filePath: string,
   agent: AgentType | null,
   options: { schemaLogger?: SchemaLogger; scanSubagents?: boolean } = {}
-): Promise<UnifiedTranscript | null> {
+): Promise<UnifiedTranscript> {
   const detectedAgent = agent ?? detectAgentFromPath(filePath);
 
   if (!detectedAgent) {
-    return null;
+    throw new Error(
+      `Could not detect agent type for: ${filePath}. ` +
+      `Specify agent explicitly as one of: ${SUPPORTED_AGENTS.join(", ")}`
+    );
   }
+
+  let result: UnifiedTranscript | null = null;
 
   switch (detectedAgent) {
     case "claude":
-      return parseClaudeTranscript(filePath, options);
+      result = await parseClaudeTranscript(filePath, options);
+      break;
 
     case "codex":
-      return parseCodexTranscript(filePath, options);
+      result = await parseCodexTranscript(filePath, options);
+      break;
 
     case "gemini":
-      return parseGeminiTranscript(filePath, options);
+      result = await parseGeminiTranscript(filePath, options);
+      break;
 
     default:
-      return null;
+      throw new Error(
+        `Unsupported agent type: "${detectedAgent}". ` +
+        `Supported agents: ${SUPPORTED_AGENTS.join(", ")}`
+      );
   }
+
+  if (!result) {
+    throw new Error(`Failed to parse transcript: ${filePath}`);
+  }
+
+  return result;
 }
 
 /**
  * Scan a directory for transcripts of a specific agent type.
+ * @throws Error if agent type is not supported
  */
 export async function scanTranscripts(
   basePath: string,
@@ -242,8 +270,15 @@ export async function scanTranscripts(
     case "gemini":
       return scanGeminiTranscripts(basePath, options);
 
-    default:
+    case "custom":
+      // Custom agent type requires user-provided parsing logic
       return [];
+
+    default:
+      throw new Error(
+        `Unsupported agent type: "${agent}". ` +
+        `Supported agents: ${SUPPORTED_AGENTS.join(", ")}`
+      );
   }
 }
 
@@ -281,32 +316,3 @@ export async function scanAllTranscripts(
   return { transcripts, stats };
 }
 
-/**
- * Get transcript path from ID.
- */
-export function getTranscriptPath(
-  id: string,
-  agentPaths: Record<string, string>,
-  transcriptIndex?: Map<string, UnifiedTranscript>
-): string | null {
-  // Check index first
-  if (transcriptIndex) {
-    const transcript = transcriptIndex.get(id);
-    if (transcript) return transcript.path;
-  }
-
-  // Parse ID to get agent and filename
-  const colonIndex = id.indexOf(":");
-  if (colonIndex === -1) return null;
-
-  const agent = id.slice(0, colonIndex) as AgentType;
-  const filename = id.slice(colonIndex + 1);
-
-  // Reconstruct path based on agent
-  const basePath = agentPaths[agent];
-  if (!basePath) return null;
-
-  // This is a best-effort reconstruction - may not be accurate for all cases
-  // The index should be used for reliable lookups
-  return null;
-}

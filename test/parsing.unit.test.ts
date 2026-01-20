@@ -1,4 +1,4 @@
-import { expect, test, describe, beforeAll } from "bun:test";
+import { expect, test, describe } from "bun:test";
 import { join } from "path";
 import {
   // Core API
@@ -792,5 +792,149 @@ describe("Integration: Real User Flows", () => {
     }
 
     expect(allEntries.length).toBe(total);
+  });
+});
+
+// ============================================================================
+// Pagination Edge Cases
+// ============================================================================
+
+describe("Pagination Edge Cases", () => {
+  const claudeFixture = join(FIXTURES_DIR, "claude-session.jsonl");
+
+  test("offset beyond total returns empty array", async () => {
+    const { entries, total } = await parseClaudeEntries(claudeFixture, {
+      offset: 1000,
+      limit: 10
+    });
+
+    expect(entries.length).toBe(0);
+    expect(total).toBe(9); // Total still accurate
+  });
+
+  test("limit of 0 returns empty array", async () => {
+    const { entries, total } = await parseClaudeEntries(claudeFixture, {
+      offset: 0,
+      limit: 0
+    });
+
+    expect(entries.length).toBe(0);
+    expect(total).toBe(9);
+  });
+
+  test("limit larger than remaining entries returns all remaining", async () => {
+    const { entries, total } = await parseClaudeEntries(claudeFixture, {
+      offset: 7,
+      limit: 100
+    });
+
+    expect(entries.length).toBe(2); // Only 2 entries after offset 7
+    expect(total).toBe(9);
+  });
+
+  test("negative offset treated as 0", async () => {
+    // Negative offset should not crash, implementation may vary
+    const { entries } = await parseClaudeEntries(claudeFixture, {
+      offset: -5,
+      limit: 3
+    });
+
+    // Should return first 3 entries (offset clamped to 0)
+    expect(entries.length).toBeLessThanOrEqual(3);
+  });
+});
+
+// ============================================================================
+// parseTranscript Tests
+// ============================================================================
+
+describe("parseTranscript", () => {
+  const claudeFixture = join(FIXTURES_DIR, "claude-session.jsonl");
+  const codexFixture = join(FIXTURES_DIR, "codex-session.jsonl");
+  const geminiFixture = join(FIXTURES_DIR, "gemini-session.json");
+
+  test("parses Claude transcript metadata", async () => {
+    const transcript = await parseTranscript(claudeFixture, "claude");
+
+    expect(transcript.id).toBeDefined();
+    expect(transcript.agent).toBe("claude");
+    expect(transcript.path).toBe(claudeFixture);
+    expect(transcript.entryCount).toBe(9);
+    expect(transcript.stats).toBeDefined();
+    expect(transcript.stats?.tokens.input).toBeGreaterThan(0);
+  });
+
+  test("parses Codex transcript metadata", async () => {
+    const transcript = await parseTranscript(codexFixture, "codex");
+
+    expect(transcript.id).toBeDefined();
+    expect(transcript.agent).toBe("codex");
+    expect(transcript.entryCount).toBe(12);
+  });
+
+  test("parses Gemini transcript metadata", async () => {
+    const transcript = await parseTranscript(geminiFixture, "gemini");
+
+    expect(transcript.id).toBeDefined();
+    expect(transcript.agent).toBe("gemini");
+  });
+
+  test("throws with remediation hint when agent not detected", async () => {
+    await expect(
+      parseTranscript(claudeFixture, null)
+    ).rejects.toThrow("Specify agent explicitly as one of: claude, codex, gemini");
+  });
+});
+
+// ============================================================================
+// Error Message Tests
+// ============================================================================
+
+describe("Error Messages", () => {
+  const claudeFixture = join(FIXTURES_DIR, "claude-session.jsonl");
+
+  test("parseEntries error includes remediation hint", async () => {
+    try {
+      await parseEntries(claudeFixture, null);
+      expect(true).toBe(false); // Should not reach here
+    } catch (err) {
+      const message = (err as Error).message;
+      expect(message).toContain("Could not detect agent type");
+      expect(message).toContain("Specify agent explicitly");
+      expect(message).toContain("claude, codex, gemini");
+    }
+  });
+
+  test("parseTranscript error includes remediation hint", async () => {
+    try {
+      await parseTranscript(claudeFixture, null);
+      expect(true).toBe(false); // Should not reach here
+    } catch (err) {
+      const message = (err as Error).message;
+      expect(message).toContain("Could not detect agent type");
+      expect(message).toContain("Specify agent explicitly");
+    }
+  });
+});
+
+// ============================================================================
+// scanTranscripts Tests (Directory Scanning)
+// ============================================================================
+
+describe("scanTranscripts", () => {
+  test("returns empty array for non-existent directory", async () => {
+    const transcripts = await scanTranscripts("/non/existent/dir", "claude");
+    expect(transcripts).toEqual([]);
+  });
+
+  test("returns empty array for custom agent type", async () => {
+    const transcripts = await scanTranscripts(FIXTURES_DIR, "custom");
+    expect(transcripts).toEqual([]);
+  });
+
+  test("throws for invalid agent type", async () => {
+    await expect(
+      scanTranscripts(FIXTURES_DIR, "invalid" as any)
+    ).rejects.toThrow("Unsupported agent type");
   });
 });

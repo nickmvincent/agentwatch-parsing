@@ -32,7 +32,6 @@ export {
   parseTranscript,
   scanTranscripts,
   scanAllTranscripts,
-  getTranscriptPath,
   detectAgentFromPath,
   detectAgentFromId,
   detectAgentFromContent,
