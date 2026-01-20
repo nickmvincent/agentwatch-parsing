@@ -13,6 +13,7 @@ import { z } from "zod";
 
 export const AgentTypeSchema = z.enum(["claude", "codex", "gemini", "custom"]);
 export type AgentType = z.infer<typeof AgentTypeSchema>;
+export type SupportedAgentType = Exclude<AgentType, "custom">;
 
 // ============================================================================
 // Entry Types
@@ -186,11 +187,13 @@ export interface ParseOptions {
   offset?: number;
   limit?: number;
   includeRaw?: boolean;
+  maxFileSizeBytes?: number;
 }
 
 export interface ScanOptions {
   includeSubagents?: boolean;
   computeStats?: boolean;
+  maxFileSizeBytes?: number;
 }
 
 export const ParseResultSchema = z.object({

@@ -6,6 +6,7 @@ import type {
   UnifiedEntry,
   UnifiedTranscript,
   AgentType,
+  SupportedAgentType,
   AgentInfo
 } from "../types.js";
 import type { SchemaLogger } from "../schema-logger.js";
@@ -77,7 +78,9 @@ export const AGENT_INFO: Record<AgentType, AgentInfo> = {
 /**
  * Detect agent type from file path.
  */
-export function detectAgentFromPath(filePath: string): AgentType | null {
+export function detectAgentFromPath(
+  filePath: string
+): SupportedAgentType | null {
   const lowerPath = normalizePathSeparators(filePath).toLowerCase();
 
   if (
@@ -113,7 +116,9 @@ export function detectAgentFromId(id: string): AgentType | null {
 /**
  * Detect agent type from content (first few lines).
  */
-export function detectAgentFromContent(content: string): AgentType | null {
+export function detectAgentFromContent(
+  content: string
+): SupportedAgentType | null {
   const firstLine = content.split("\n")[0]?.trim();
   if (!firstLine) return null;
 
@@ -169,9 +174,13 @@ const SUPPORTED_AGENTS = ["claude", "codex", "gemini"] as const;
  */
 export async function parseEntries(
   filePath: string,
-  agent: AgentType | null,
+  agent: SupportedAgentType | null,
   options: ParseEntriesOptions = {}
-): Promise<{ entries: UnifiedEntry[]; total: number; agent: AgentType }> {
+): Promise<{
+  entries: UnifiedEntry[];
+  total: number;
+  agent: SupportedAgentType;
+}> {
   // Auto-detect if not specified
   const detectedAgent = agent ?? detectAgentFromPath(filePath);
 
@@ -212,7 +221,7 @@ export async function parseEntries(
  */
 export async function parseTranscript(
   filePath: string,
-  agent: AgentType | null,
+  agent: SupportedAgentType | null,
   options: {
     schemaLogger?: SchemaLogger;
     scanSubagents?: boolean;

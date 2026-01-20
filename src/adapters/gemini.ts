@@ -198,13 +198,15 @@ export async function parseGeminiEntries(
 ): Promise<{ entries: UnifiedEntry[]; total: number }> {
   const {
     offset = 0,
-    limit = 500,
+    limit = Number.POSITIVE_INFINITY,
     includeRaw = false,
     schemaLogger,
     maxFileSizeBytes
   } = options;
   const safeOffset = Math.max(0, offset);
-  const safeLimit = Math.max(0, limit);
+  const safeLimit = Number.isFinite(limit)
+    ? Math.max(0, limit)
+    : Number.POSITIVE_INFINITY;
 
   const fileStats = await stat(filePath);
   const maxBytes = maxFileSizeBytes ?? DEFAULT_MAX_JSON_FILE_BYTES;
@@ -334,13 +336,14 @@ export async function parseGeminiTranscript(
       }
     }
 
-    // Infer project from path (project hash is in parent directories)
+    // Infer project from path (Gemini structure: .../tmp/{project-hash}/chats/{session}.json)
+    // Find "chats" and go back one to get project hash
     const normalizedPath = normalizePathSeparators(filePath);
     const pathParts = normalizedPath.split("/");
-    const tmpIndex = pathParts.indexOf("tmp");
+    const chatsIndex = pathParts.indexOf("chats");
     let projectDir: string | null = null;
-    if (tmpIndex >= 0 && tmpIndex < pathParts.length - 2) {
-      projectDir = pathParts[tmpIndex + 1]; // Project hash
+    if (chatsIndex > 0) {
+      projectDir = pathParts[chatsIndex - 1]; // Project hash is parent of chats
     }
 
     // Use session ID or first message content as name

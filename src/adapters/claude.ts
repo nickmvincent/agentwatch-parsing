@@ -312,13 +312,15 @@ export async function parseClaudeEntries(
 ): Promise<{ entries: UnifiedEntry[]; total: number }> {
   const {
     offset = 0,
-    limit = 500,
+    limit = Number.POSITIVE_INFINITY,
     includeRaw = false,
     schemaLogger,
     maxFileSizeBytes
   } = options;
   const safeOffset = Math.max(0, offset);
-  const safeLimit = Math.max(0, limit);
+  const safeLimit = Number.isFinite(limit)
+    ? Math.max(0, limit)
+    : Number.POSITIVE_INFINITY;
 
   const fileStats = await stat(filePath);
   const fileSize = fileStats.size;

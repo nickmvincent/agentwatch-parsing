@@ -1,4 +1,5 @@
 import { expect, test, describe } from "bun:test";
+import { stat } from "fs/promises";
 import { join } from "path";
 import {
   // Core API
@@ -34,6 +35,12 @@ import type { UnifiedEntry, UnifiedTranscript, AgentType } from "../src";
 
 // Test fixtures directory
 const FIXTURES_DIR = join(import.meta.dir, "fixtures");
+const LARGE_CLAUDE_FIXTURE = join(
+  FIXTURES_DIR,
+  "claude-session-large.jsonl"
+);
+const LARGE_CLAUDE_ENTRY_COUNT = 2500;
+const STREAMING_THRESHOLD_BYTES = 1024 * 1024;
 
 // ============================================================================
 // Schema Validation Tests
@@ -291,6 +298,40 @@ describe("Claude Parsing", () => {
         parseEntries(claudeFixture, null)
       ).rejects.toThrow("Could not detect agent type");
     });
+  });
+});
+
+// ============================================================================
+// Large File Streaming Tests (JSONL)
+// ============================================================================
+
+describe("Claude Streaming", () => {
+  test("streams large transcripts with exact counts", async () => {
+    const fileStats = await stat(LARGE_CLAUDE_FIXTURE);
+    expect(fileStats.size).toBeGreaterThan(STREAMING_THRESHOLD_BYTES);
+
+    const { entries, total } = await parseClaudeEntries(
+      LARGE_CLAUDE_FIXTURE,
+      { limit: 20 }
+    );
+
+    expect(total).toBe(LARGE_CLAUDE_ENTRY_COUNT);
+    expect(entries.length).toBe(20);
+    expect(entries[0].id).toBe("msg_00000");
+  });
+
+  test("computes exact stats for large transcripts", async () => {
+    const transcript = await parseTranscript(LARGE_CLAUDE_FIXTURE, "claude");
+
+    expect(transcript.entryCount).toBe(LARGE_CLAUDE_ENTRY_COUNT);
+    expect(transcript.stats?.entryTypes.user).toBe(LARGE_CLAUDE_ENTRY_COUNT);
+    expect(transcript.stats?.models["claude-test"]).toBe(
+      LARGE_CLAUDE_ENTRY_COUNT
+    );
+    expect(transcript.stats?.tokens.input).toBe(2 * LARGE_CLAUDE_ENTRY_COUNT);
+    expect(transcript.stats?.tokens.output).toBe(3 * LARGE_CLAUDE_ENTRY_COUNT);
+    expect(transcript.stats?.tokens.cached).toBe(2 * LARGE_CLAUDE_ENTRY_COUNT);
+    expect(transcript.stats?.tokens.total).toBe(5 * LARGE_CLAUDE_ENTRY_COUNT);
   });
 });
 

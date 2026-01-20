@@ -22,8 +22,10 @@
   "scripts": {
     "build": "tsc",
     "test": "bun test",
+    "test:coverage": "bun test --coverage --coverage-reporter=lcov",
     "test:node": "node --test test/node-smoke.test.mjs",
     "typecheck": "tsc --noEmit",
+    "coverage:check": "bun run test:coverage && node scripts/check-coverage.mjs",
     "prepublishOnly": "npm run build"
   },
   "engines": {

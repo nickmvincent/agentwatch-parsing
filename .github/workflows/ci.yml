@@ -24,11 +24,11 @@ jobs:
       - name: Type check
         run: bun run typecheck
 
-      - name: Run tests
-        run: bun test
-
       - name: Build
         run: bun run build
+
+      - name: Run tests with coverage
+        run: bun run coverage:check
 
   test-node:
     runs-on: ubuntu-latest
@@ -57,4 +57,4 @@ jobs:
         run: bun run build
 
       - name: Verify Node.js compatibility
-        run: node -e "require('./dist/index.js')"
+        run: bun run test:node

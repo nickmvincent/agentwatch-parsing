@@ -10,6 +10,8 @@ bun add @agentwatch/parsing
 npm install @agentwatch/parsing
 ```
 
+This package is ESM-only. Use `import` in Node 18+ and bundlers.
+
 ## Quick Start
 
 ```typescript
@@ -26,6 +28,8 @@ for (const entry of entries) {
   console.log(`[${entry.type}] ${entry.text}`);
 }
 ```
+
+Prefer to learn by example? The tests in `test/` are written to be readable and serve as real usage samples.
 
 ## Core Concepts
 
@@ -58,6 +62,8 @@ interface UnifiedEntry {
 | Codex CLI | JSONL | `~/.codex/sessions/` | No |
 | Gemini CLI | JSON | `~/.gemini/tmp/` | No |
 
+The built-in parsers support Claude, Codex, and Gemini. Use `custom` when you map your own transcript format into the unified types.
+
 ## API Reference
 
 ### Parsing Entries
@@ -72,16 +78,24 @@ const { entries, total, agent } = await parseEntries(filePath, "claude");
 const { entries, total } = await parseClaudeEntries(filePath, {
   offset: 0,      // Skip first N entries
   limit: 100,     // Max entries to return
-  includeRaw: false  // Include original JSON in _raw field
+  includeRaw: false,  // Include original JSON in _raw field
+  maxFileSizeBytes: 20 * 1024 * 1024 // Optional safety cap
 });
 ```
+
+Notes:
+- JSONL parsers (Claude/Codex) only enforce `maxFileSizeBytes` when you provide it.
+- Gemini JSON parsing defaults to a 50MB cap unless you override `maxFileSizeBytes`.
+- `limit` defaults to returning all entries; set it for pagination or very large files.
 
 ### Parsing Transcript Metadata
 
 ```typescript
 import { parseTranscript } from "@agentwatch/parsing";
 
-const transcript = await parseTranscript("/path/to/session.jsonl", "claude");
+const transcript = await parseTranscript("/path/to/session.jsonl", "claude", {
+  maxFileSizeBytes: 20 * 1024 * 1024
+});
 
 console.log(transcript);
 // {
@@ -121,6 +135,8 @@ const { transcripts, stats } = await scanAllTranscripts({
 console.log(stats);
 // { claude: 45, codex: 12, gemini: 3, total: 60 }
 ```
+
+You can also pass `{ maxFileSizeBytes }` to `scanTranscripts` or `scanAllTranscripts` to cap transcript size during scanning.
 
 ### Agent Detection
 
@@ -311,6 +327,21 @@ Pagination uses offset-based iteration, meaning accessing page N requires scanni
 - Stores sessions as single JSON files in `~/.gemini/tmp/{project-hash}/chats/`
 - Not JSONL - entire session is one JSON object with `messages` array
 - Includes thoughts array and toolCalls array per message
+
+## Development
+
+Manual setup and run:
+
+```bash
+bun install
+bun run typecheck
+bun test
+bun run build
+bun run test:node
+bun run test:coverage
+```
+
+If you are integrating this into another project, reading the tests is the quickest way to see real-world usage patterns.
 
 ## License
 
