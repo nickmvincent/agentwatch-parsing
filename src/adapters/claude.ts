@@ -62,10 +62,12 @@ function detectEntryType(obj: Record<string, unknown>): UnifiedEntry["type"] {
   const role =
     (obj.role as string | undefined) ?? (message?.role as string | undefined);
 
-  // System entries
+  // System/metadata entries
   if (entryType === "system") return "system";
   if (entryType === "summary") return "summary";
   if (entryType === "file-history-snapshot") return "system";
+  if (entryType === "progress") return "system";
+  if (entryType === "queue-operation") return "system";
 
   // Check for tool results in user messages
   if (entryType === "user" || role === "user") {
