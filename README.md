@@ -2,6 +2,34 @@
 
 Parse AI agent transcripts into a unified format. Supports Claude Code, Codex CLI, and Gemini CLI transcripts.
 
+## Try It
+
+Scan your own transcripts to see what the library does:
+
+```bash
+# Clone and run the example
+git clone https://github.com/nmvg/agentwatch-parsing.git
+cd agentwatch-parsing
+bun install
+bun examples/scan-my-transcripts.ts
+```
+
+Example output:
+```
+🔍 Scanning for AI agent transcripts...
+
+📊 Summary:
+   Claude Code: 42 transcripts
+   Codex CLI:   12 transcripts
+   Gemini CLI:  3 transcripts
+   Total:       57 transcripts
+
+📝 Recent transcripts:
+   [1/20/2026] Claude Code: "Help me refactor the authentication module" (156 entries)
+   [1/19/2026] Codex CLI: "Debug the API timeout issue" (89 entries)
+   ...
+```
+
 ## Installation
 
 ```bash
@@ -340,6 +368,8 @@ bun run build
 bun run test:node
 bun run test:coverage
 ```
+
+Coverage output is written to `coverage/lcov.info`. CI enforces 95% line coverage on `src/` (override with `COVERAGE_LINES`).
 
 If you are integrating this into another project, reading the tests is the quickest way to see real-world usage patterns.
 
