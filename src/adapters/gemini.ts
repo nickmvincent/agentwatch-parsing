@@ -143,23 +143,24 @@ function parseGeminiMessage(
   if (message.toolCalls && message.toolCalls.length > 0) {
     for (let i = 0; i < message.toolCalls.length; i++) {
       const tool = message.toolCalls[i];
+      const toolCallId = tool.id ?? `${baseId}-tool-${i}`;
 
       // Tool call entry
       entries.push({
-        id: tool.id ?? `${baseId}-tool-${i}`,
+        id: toolCallId,
         timestamp:
           tool.timestamp ?? message.timestamp ?? new Date().toISOString(),
         type: "tool_call",
         agent: AGENT,
         toolName: tool.name ?? tool.displayName,
         toolInput: tool.args,
-        toolCallId: tool.id
+        toolCallId
       });
 
       // Tool result entry (if present)
       if (tool.result !== undefined) {
         entries.push({
-          id: `${tool.id ?? `${baseId}-tool-${i}`}-result`,
+          id: `${toolCallId}-result`,
           timestamp:
             tool.timestamp ?? message.timestamp ?? new Date().toISOString(),
           type: "tool_result",
@@ -171,7 +172,7 @@ function parseGeminiMessage(
               : Array.isArray(tool.result)
                 ? JSON.stringify(tool.result)
                 : undefined,
-          toolCallId: tool.id
+          toolCallId
         });
       }
     }
@@ -193,6 +194,8 @@ export async function parseGeminiEntries(
   } = {}
 ): Promise<{ entries: UnifiedEntry[]; total: number }> {
   const { offset = 0, limit = 500, includeRaw = false, schemaLogger } = options;
+  const safeOffset = Math.max(0, offset);
+  const safeLimit = Math.max(0, limit);
 
   const content = await readFile(filePath, "utf-8");
   let session: GeminiSession;
@@ -224,7 +227,10 @@ export async function parseGeminiEntries(
   }
 
   const total = allEntries.length;
-  const slicedEntries = allEntries.slice(offset, offset + limit);
+  const slicedEntries = allEntries.slice(
+    safeOffset,
+    safeOffset + safeLimit
+  );
 
   if (includeRaw) {
     // Add raw session data to first entry

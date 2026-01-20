@@ -13,7 +13,7 @@
  * - custom_tool_call_output: Output from custom tools
  */
 
-import { stat, readdir } from "fs/promises";
+import { readFile, stat, readdir } from "fs/promises";
 import { join, basename } from "path";
 import type {
   UnifiedEntry,
@@ -27,6 +27,7 @@ import {
   expandHome,
   extractTextContent,
   finalizeStats,
+  readFileChunk,
   SMALL_FILE_THRESHOLD,
   type TextBlockRule
 } from "./shared";
@@ -300,23 +301,25 @@ export async function parseCodexEntries(
   } = {}
 ): Promise<{ entries: UnifiedEntry[]; total: number }> {
   const { offset = 0, limit = 500, includeRaw = false, schemaLogger } = options;
+  const safeOffset = Math.max(0, offset);
+  const safeLimit = Math.max(0, limit);
 
-  const file = Bun.file(filePath);
-  const fileSize = file.size;
+  const fileStats = await stat(filePath);
+  const fileSize = fileStats.size;
+  const content = await readFile(filePath, "utf-8");
 
   // For small files, use simple full-file approach
   if (fileSize < SMALL_FILE_THRESHOLD) {
-    const content = await file.text();
     const lines = content.split("\n").filter((line) => line.trim());
     const total = lines.length;
 
     const entries: UnifiedEntry[] = [];
-    const slicedLines = lines.slice(offset, offset + limit);
+    const slicedLines = lines.slice(safeOffset, safeOffset + safeLimit);
 
     for (let i = 0; i < slicedLines.length; i++) {
       const entry = parseCodexEntry(
         slicedLines[i],
-        offset + i,
+        safeOffset + i,
         filePath,
         schemaLogger
       );
@@ -338,7 +341,6 @@ export async function parseCodexEntries(
   }
 
   // For large files, single pass: count lines and collect only the ones we need
-  const content = await file.text();
   const lines: string[] = [];
   let lineStart = 0;
   let lineIndex = 0;
@@ -349,7 +351,10 @@ export async function parseCodexEntries(
       const line = content.slice(lineStart, i).trim();
       if (line) {
         // Only store lines within our pagination window
-        if (lineIndex >= offset && lineIndex < offset + limit) {
+        if (
+          lineIndex >= safeOffset &&
+          lineIndex < safeOffset + safeLimit
+        ) {
           lines.push(line);
         }
         lineIndex++;
@@ -361,7 +366,12 @@ export async function parseCodexEntries(
 
   const entries: UnifiedEntry[] = [];
   for (let i = 0; i < lines.length; i++) {
-    const entry = parseCodexEntry(lines[i], offset + i, filePath, schemaLogger);
+    const entry = parseCodexEntry(
+      lines[i],
+      safeOffset + i,
+      filePath,
+      schemaLogger
+    );
     if (entry) {
       if (!includeRaw) {
         delete entry._raw;
@@ -406,7 +416,7 @@ export async function parseCodexTranscript(
 
     // Stats accumulator
     const statsAcc = createStatsAccumulator();
-    let lineIndex = 0;
+    const fileSize = fileStats.size;
 
     // Parse date from filename (rollout-YYYY-MM-DDTHH-mm-ss-...)
     const dateMatch = fileName.match(
@@ -420,55 +430,98 @@ export async function parseCodexTranscript(
       }
     }
 
-    // Read file to extract metadata
-    const file = Bun.file(filePath);
-    const fileSize = fileStats.size;
-    const firstChunkSize = Math.min(CHUNK_SIZE, fileSize);
-    const firstChunk = await file.slice(0, firstChunkSize).text();
-    const firstLines = firstChunk.split("\n").filter((l) => l.trim());
+    if (fileSize <= SMALL_FILE_THRESHOLD) {
+      const content = await readFile(filePath, "utf-8");
+      const lines = content.split("\n").filter((l) => l.trim());
 
-    for (const line of firstLines.slice(0, 50)) {
-      try {
-        const obj = JSON.parse(line);
-        entryCount++;
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        try {
+          const obj = JSON.parse(line);
+          entryCount++;
 
-        // Parse entry and accumulate stats
-        const entry = parseCodexEntry(
-          line,
-          lineIndex++,
-          filePath,
-          schemaLogger
-        );
-        if (entry) {
-          accumulateEntryStats(statsAcc, entry);
-        }
-
-        // Extract project from session_meta
-        if (obj.type === "session_meta" && obj.payload) {
-          const cwd = obj.payload.cwd as string | undefined;
-          if (cwd) {
-            projectDir = cwd;
-            name = basename(cwd);
+          const entry = parseCodexEntry(
+            line,
+            i,
+            filePath,
+            schemaLogger
+          );
+          if (entry) {
+            accumulateEntryStats(statsAcc, entry);
           }
-        }
 
-        // Extract timestamps
-        const ts = obj.timestamp as string | undefined;
-        if (ts) {
-          const time = new Date(ts).getTime();
-          if (!Number.isNaN(time)) {
-            if (!startTime || time < startTime) startTime = time;
+          if (obj.type === "session_meta" && obj.payload) {
+            const cwd = obj.payload.cwd as string | undefined;
+            if (cwd) {
+              projectDir = cwd;
+              name = basename(cwd);
+            }
           }
+
+          const ts = obj.timestamp as string | undefined;
+          if (ts) {
+            const time = new Date(ts).getTime();
+            if (!Number.isNaN(time)) {
+              if (!startTime || time < startTime) startTime = time;
+              if (!endTime || time > endTime) endTime = time;
+            }
+          }
+        } catch {
+          // Skip malformed lines
         }
-      } catch {
-        // Skip malformed lines
       }
-    }
+    } else {
+      let lineIndex = 0;
 
-    // Read last chunk for end time
-    if (fileSize > CHUNK_SIZE) {
+      const firstChunkSize = Math.min(CHUNK_SIZE, fileSize);
+      const firstChunk = await readFileChunk(
+        filePath,
+        0,
+        firstChunkSize
+      );
+      const firstLines = firstChunk.split("\n").filter((l) => l.trim());
+
+      for (const line of firstLines.slice(0, 50)) {
+        try {
+          const obj = JSON.parse(line);
+          entryCount++;
+
+          const entry = parseCodexEntry(
+            line,
+            lineIndex++,
+            filePath,
+            schemaLogger
+          );
+          if (entry) {
+            accumulateEntryStats(statsAcc, entry);
+          }
+
+          if (obj.type === "session_meta" && obj.payload) {
+            const cwd = obj.payload.cwd as string | undefined;
+            if (cwd) {
+              projectDir = cwd;
+              name = basename(cwd);
+            }
+          }
+
+          const ts = obj.timestamp as string | undefined;
+          if (ts) {
+            const time = new Date(ts).getTime();
+            if (!Number.isNaN(time)) {
+              if (!startTime || time < startTime) startTime = time;
+            }
+          }
+        } catch {
+          // Skip malformed lines
+        }
+      }
+
       const lastChunkStart = Math.max(0, fileSize - CHUNK_SIZE);
-      const lastChunk = await file.slice(lastChunkStart, fileSize).text();
+      const lastChunk = await readFileChunk(
+        filePath,
+        lastChunkStart,
+        CHUNK_SIZE
+      );
       const lastLines = lastChunk
         .split("\n")
         .slice(1)
@@ -479,7 +532,6 @@ export async function parseCodexTranscript(
           const obj = JSON.parse(line);
           entryCount++;
 
-          // Parse entry and accumulate stats
           const entry = parseCodexEntry(
             line,
             lineIndex++,
@@ -501,26 +553,11 @@ export async function parseCodexTranscript(
           // Skip
         }
       }
-    } else {
-      for (const line of firstLines.slice(-50)) {
-        try {
-          const obj = JSON.parse(line);
-          const ts = obj.timestamp as string | undefined;
-          if (ts) {
-            const time = new Date(ts).getTime();
-            if (!Number.isNaN(time) && (!endTime || time > endTime)) {
-              endTime = time;
-            }
-          }
-        } catch {
-          // Skip
-        }
-      }
-    }
 
-    // Estimate entry count from file size
-    if (entryCount < 100 && fileSize > CHUNK_SIZE * 2) {
-      entryCount = Math.round(fileSize / 500);
+      const estimatedCount = Math.round(fileSize / 500);
+      if (estimatedCount > entryCount) {
+        entryCount = estimatedCount;
+      }
     }
 
     // Finalize stats

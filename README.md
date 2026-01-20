@@ -273,6 +273,23 @@ interface TokenUsage {
 }
 ```
 
+## Limitations
+
+### Entry Count Estimation for Large Files
+
+For transcripts larger than 1MB, the `entryCount` field in `UnifiedTranscript` is estimated from file size rather than counting every line. This estimation assumes average line lengths (~800 bytes for Claude, ~500 bytes for Codex) and may be inaccurate for transcripts with unusually long or short entries (e.g., large tool outputs or minimal content).
+
+To get an exact count, use `parseEntries()` which returns the precise `total`:
+
+```typescript
+const { total } = await parseEntries(transcriptPath, "claude", { limit: 0 });
+console.log(`Exact entry count: ${total}`);
+```
+
+### Pagination Performance
+
+Pagination uses offset-based iteration, meaning accessing page N requires scanning all previous lines. For very large transcripts, later pages may be slower to retrieve. Consider caching parsed entries if you need random access.
+
 ## Agent-Specific Notes
 
 ### Claude Code

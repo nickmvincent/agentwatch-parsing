@@ -2,6 +2,7 @@
  * Shared utilities for transcript parsing adapters
  */
 
+import { open } from "fs/promises";
 import type { TranscriptStats, UnifiedEntry } from "../types";
 
 /**
@@ -109,4 +110,27 @@ export function createId(prefix: string): string {
   const timestamp = Date.now().toString(36);
   const random = Math.random().toString(36).slice(2, 8);
   return `${prefix}_${timestamp}_${random}`;
+}
+
+/**
+ * Read a chunk of a file efficiently without loading the entire file.
+ * Used for sampling large files (reading first/last chunks for metadata).
+ */
+export async function readFileChunk(
+  filePath: string,
+  start: number,
+  length: number
+): Promise<string> {
+  if (length <= 0) {
+    return "";
+  }
+
+  const handle = await open(filePath, "r");
+  try {
+    const buffer = Buffer.allocUnsafe(length);
+    const { bytesRead } = await handle.read(buffer, 0, length, start);
+    return buffer.subarray(0, bytesRead).toString("utf-8");
+  } finally {
+    await handle.close();
+  }
 }

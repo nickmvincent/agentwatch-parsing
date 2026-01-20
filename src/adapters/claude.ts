@@ -32,6 +32,7 @@ import {
   expandHome,
   extractTextContent,
   finalizeStats,
+  readFileChunk,
   SMALL_FILE_THRESHOLD,
   type TextBlockRule
 } from "./shared";
@@ -285,23 +286,25 @@ export async function parseClaudeEntries(
   } = {}
 ): Promise<{ entries: UnifiedEntry[]; total: number }> {
   const { offset = 0, limit = 500, includeRaw = false, schemaLogger } = options;
+  const safeOffset = Math.max(0, offset);
+  const safeLimit = Math.max(0, limit);
 
-  const file = Bun.file(filePath);
-  const fileSize = file.size;
+  const fileStats = await stat(filePath);
+  const fileSize = fileStats.size;
+  const content = await readFile(filePath, "utf-8");
 
   // For small files, use simple full-file approach
   if (fileSize < SMALL_FILE_THRESHOLD) {
-    const content = await file.text();
     const lines = content.split("\n").filter((line) => line.trim());
     const total = lines.length;
 
     const entries: UnifiedEntry[] = [];
-    const slicedLines = lines.slice(offset, offset + limit);
+    const slicedLines = lines.slice(safeOffset, safeOffset + safeLimit);
 
     for (let i = 0; i < slicedLines.length; i++) {
       const entry = parseClaudeEntry(
         slicedLines[i],
-        offset + i,
+        safeOffset + i,
         filePath,
         schemaLogger
       );
@@ -319,7 +322,6 @@ export async function parseClaudeEntries(
   }
 
   // For large files, stream and count lines efficiently
-  const content = await file.text();
   const lines: string[] = [];
   let lineStart = 0;
   let lineIndex = 0;
@@ -331,7 +333,10 @@ export async function parseClaudeEntries(
       const line = content.slice(lineStart, i).trim();
       if (line) {
         // Only store lines within our pagination window
-        if (lineIndex >= offset && lineIndex < offset + limit) {
+        if (
+          lineIndex >= safeOffset &&
+          lineIndex < safeOffset + safeLimit
+        ) {
           lines.push(line);
         }
         lineIndex++;
@@ -345,7 +350,7 @@ export async function parseClaudeEntries(
   for (let i = 0; i < lines.length; i++) {
     const entry = parseClaudeEntry(
       lines[i],
-      offset + i,
+      safeOffset + i,
       filePath,
       schemaLogger
     );
@@ -391,7 +396,7 @@ export async function parseClaudeTranscript(
 
     // Stats accumulator
     const statsAcc = createStatsAccumulator();
-    let lineIndex = 0;
+    const fileSize = fileStats.size;
 
     // Infer project directory from path
     const parentDir = basename(dirname(filePath));
@@ -400,66 +405,59 @@ export async function parseClaudeTranscript(
       name = basename(projectDir);
     }
 
-    // Read file in chunks to extract metadata
-    const file = Bun.file(filePath);
-    const fileSize = fileStats.size;
+    if (fileSize <= SMALL_FILE_THRESHOLD) {
+      const content = await readFile(filePath, "utf-8");
+      const lines = content.split("\n").filter((l) => l.trim());
 
-    // Read first chunk for start time and summary
-    const firstChunkSize = Math.min(CHUNK_SIZE, fileSize);
-    const firstChunk = await file.slice(0, firstChunkSize).text();
-    const firstLines = firstChunk.split("\n").filter((l) => l.trim());
-
-    for (const line of firstLines.slice(0, 50)) {
-      try {
-        const obj = JSON.parse(line);
-        entryCount++;
-
-        // Parse entry and accumulate stats
-        const entry = parseClaudeEntry(
-          line,
-          lineIndex++,
-          filePath,
-          schemaLogger
-        );
-        if (entry) {
-          accumulateEntryStats(statsAcc, entry);
-        }
-
-        // Extract summary as name
-        if (obj.type === "summary" && obj.summary) {
-          name = obj.summary.slice(0, 60);
-          continue;
-        }
-
-        // Extract start time
-        const ts = obj.timestamp || obj.ts;
-        if (ts) {
-          const time =
-            typeof ts === "number" ? ts * 1000 : new Date(ts).getTime();
-          if (!Number.isNaN(time) && (!startTime || time < startTime)) {
-            startTime = time;
-          }
-        }
-      } catch {
-        // Skip malformed lines
-      }
-    }
-
-    // Read last chunk for end time
-    if (fileSize > CHUNK_SIZE) {
-      const lastChunkStart = Math.max(0, fileSize - CHUNK_SIZE);
-      const lastChunk = await file.slice(lastChunkStart, fileSize).text();
-      const lastLines = lastChunk
-        .split("\n")
-        .slice(1) // Skip potential partial first line
-        .filter((l) => l.trim());
-
-      for (const line of lastLines.slice(-50)) {
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
         try {
           const obj = JSON.parse(line);
           entryCount++;
 
-          // Parse entry and accumulate stats
+          const entry = parseClaudeEntry(
+            line,
+            i,
+            filePath,
+            schemaLogger
+          );
+          if (entry) {
+            accumulateEntryStats(statsAcc, entry);
+          }
+
+          if (obj.type === "summary" && obj.summary) {
+            name = obj.summary.slice(0, 60);
+          }
+
+          const ts = obj.timestamp || obj.ts;
+          if (ts) {
+            const time =
+              typeof ts === "number" ? ts * 1000 : new Date(ts).getTime();
+            if (!Number.isNaN(time)) {
+              if (!startTime || time < startTime) startTime = time;
+              if (!endTime || time > endTime) endTime = time;
+            }
+          }
+        } catch {
+          // Skip malformed lines
+        }
+      }
+    } else {
+      let lineIndex = 0;
+
+      const firstChunkSize = Math.min(CHUNK_SIZE, fileSize);
+      const firstChunk = await readFileChunk(
+        filePath,
+        0,
+        firstChunkSize
+      );
+      const firstLines = firstChunk.split("\n").filter((l) => l.trim());
+
+      for (const line of firstLines.slice(0, 50)) {
+        try {
+          const obj = JSON.parse(line);
+          entryCount++;
+
           const entry = parseClaudeEntry(
             line,
             lineIndex++,
@@ -470,7 +468,50 @@ export async function parseClaudeTranscript(
             accumulateEntryStats(statsAcc, entry);
           }
 
-          // Update name if we find a later summary
+          if (obj.type === "summary" && obj.summary) {
+            name = obj.summary.slice(0, 60);
+            continue;
+          }
+
+          const ts = obj.timestamp || obj.ts;
+          if (ts) {
+            const time =
+              typeof ts === "number" ? ts * 1000 : new Date(ts).getTime();
+            if (!Number.isNaN(time) && (!startTime || time < startTime)) {
+              startTime = time;
+            }
+          }
+        } catch {
+          // Skip malformed lines
+        }
+      }
+
+      const lastChunkStart = Math.max(0, fileSize - CHUNK_SIZE);
+      const lastChunk = await readFileChunk(
+        filePath,
+        lastChunkStart,
+        CHUNK_SIZE
+      );
+      const lastLines = lastChunk
+        .split("\n")
+        .slice(1) // Skip potential partial first line
+        .filter((l) => l.trim());
+
+      for (const line of lastLines.slice(-50)) {
+        try {
+          const obj = JSON.parse(line);
+          entryCount++;
+
+          const entry = parseClaudeEntry(
+            line,
+            lineIndex++,
+            filePath,
+            schemaLogger
+          );
+          if (entry) {
+            accumulateEntryStats(statsAcc, entry);
+          }
+
           if (obj.type === "summary" && obj.summary) {
             name = obj.summary.slice(0, 60);
             continue;
@@ -488,28 +529,11 @@ export async function parseClaudeTranscript(
           // Skip malformed lines
         }
       }
-    } else {
-      // Small file - use first chunk for end time too
-      for (const line of firstLines.slice(-50)) {
-        try {
-          const obj = JSON.parse(line);
-          const ts = obj.timestamp || obj.ts;
-          if (ts) {
-            const time =
-              typeof ts === "number" ? ts * 1000 : new Date(ts).getTime();
-            if (!Number.isNaN(time) && (!endTime || time > endTime)) {
-              endTime = time;
-            }
-          }
-        } catch {
-          // Skip
-        }
-      }
-    }
 
-    // Estimate entry count from file size if not fully counted
-    if (entryCount < 100 && fileSize > CHUNK_SIZE * 2) {
-      entryCount = Math.round(fileSize / 800); // Rough estimate
+      const estimatedCount = Math.round(fileSize / 800);
+      if (estimatedCount > entryCount) {
+        entryCount = estimatedCount;
+      }
     }
 
     // Finalize stats
@@ -872,7 +896,7 @@ export async function parseClaudeTranscriptFull(
   };
 
   // Track tool_use IDs to link with tool_results
-  const toolCallIdToEntry = new Map<string, string>();
+  const toolCallById = new Map<string, ExtendedToolCall>();
 
   try {
     const content = await readFile(filePath, "utf-8");
@@ -893,11 +917,6 @@ export async function parseClaudeTranscriptFull(
         stats.parsedEntries++;
         stats.byType[result.entry.type] =
           (stats.byType[result.entry.type] ?? 0) + 1;
-
-        // Track tool call IDs for linking
-        if (result.entry.type === "tool_call" && result.entry.toolCallId) {
-          toolCallIdToEntry.set(result.entry.toolCallId, result.entry.id);
-        }
       } else {
         stats.skippedEntries++;
       }
@@ -905,21 +924,18 @@ export async function parseClaudeTranscriptFull(
       // Collect thinking blocks and tool calls
       thinkingBlocks.push(...result.thinkingBlocks);
       toolCalls.push(...result.toolCalls);
+      for (const toolCall of result.toolCalls) {
+        toolCallById.set(toolCall.id, toolCall);
+      }
     }
 
     // Link tool_results back to tool_calls
     for (const entry of entries) {
       if (entry.type === "tool_result" && entry.toolCallId) {
-        const toolCallEntryId = toolCallIdToEntry.get(entry.toolCallId);
-        if (toolCallEntryId) {
-          // Find the corresponding tool call and set resultEntryId
-          const toolCall = toolCalls.find(
-            (tc) => tc.entryId === toolCallEntryId
-          );
-          if (toolCall) {
-            toolCall.resultEntryId = entry.id;
-            toolCall.status = "success";
-          }
+        const toolCall = toolCallById.get(entry.toolCallId);
+        if (toolCall) {
+          toolCall.resultEntryId = entry.id;
+          toolCall.status = "success";
         }
       }
     }
