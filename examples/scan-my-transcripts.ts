@@ -4,49 +4,117 @@
  *
  * Usage:
  *   bun examples/scan-my-transcripts.ts
- *   # or with Node.js (after building):
- *   node examples/scan-my-transcripts.mjs
  */
 
 import {
-  scanAllTranscripts,
+  scanTranscripts,
   parseEntries,
   expandHome,
   AGENT_INFO
 } from "../src/index.js";
+import type { UnifiedTranscript, AgentType } from "../src/index.js";
+
+// Simple progress bar
+function progressBar(current: number, total: number, width = 30): string {
+  const percent = total > 0 ? current / total : 0;
+  const filled = Math.round(width * percent);
+  const empty = width - filled;
+  const bar = "█".repeat(filled) + "░".repeat(empty);
+  return `[${bar}] ${Math.round(percent * 100)}%`;
+}
+
+function formatDate(timestamp: number): string {
+  return new Date(timestamp).toLocaleDateString();
+}
+
+function formatDateRange(transcripts: UnifiedTranscript[]): string {
+  if (transcripts.length === 0) return "N/A";
+
+  const times = transcripts
+    .map(t => t.startTime ?? t.modifiedAt)
+    .filter(t => t > 0);
+
+  if (times.length === 0) return "N/A";
+
+  const earliest = Math.min(...times);
+  const latest = Math.max(...times);
+
+  return `${formatDate(earliest)} → ${formatDate(latest)}`;
+}
+
+async function scanWithProgress(
+  agentType: AgentType,
+  path: string
+): Promise<UnifiedTranscript[]> {
+  process.stdout.write(`   Scanning ${AGENT_INFO[agentType].name}... `);
+
+  try {
+    const transcripts = await scanTranscripts(path, agentType);
+    process.stdout.write(`\r   ${AGENT_INFO[agentType].name}: ${transcripts.length} transcripts\n`);
+    return transcripts;
+  } catch {
+    process.stdout.write(`\r   ${AGENT_INFO[agentType].name}: not found\n`);
+    return [];
+  }
+}
 
 async function main() {
   console.log("🔍 Scanning for AI agent transcripts...\n");
 
   // Default paths for each agent
-  const agentPaths = {
+  const agentPaths: Record<AgentType, string> = {
     claude: expandHome("~/.claude/projects"),
     codex: expandHome("~/.codex/sessions"),
-    gemini: expandHome("~/.gemini/tmp")
+    gemini: expandHome("~/.gemini/tmp"),
+    custom: ""
   };
 
-  const { transcripts, stats } = await scanAllTranscripts(agentPaths);
+  // Scan each agent with progress
+  const byAgent: Record<AgentType, UnifiedTranscript[]> = {
+    claude: [],
+    codex: [],
+    gemini: [],
+    custom: []
+  };
 
-  // Summary
-  console.log("📊 Summary:");
-  console.log(`   Claude Code: ${stats.claude} transcripts`);
-  console.log(`   Codex CLI:   ${stats.codex} transcripts`);
-  console.log(`   Gemini CLI:  ${stats.gemini} transcripts`);
-  console.log(`   Total:       ${stats.total} transcripts\n`);
+  for (const agent of ["claude", "codex", "gemini"] as AgentType[]) {
+    byAgent[agent] = await scanWithProgress(agent, agentPaths[agent]);
+  }
 
-  if (transcripts.length === 0) {
-    console.log("No transcripts found. Make sure you have used one of the supported agents.");
+  const allTranscripts = [...byAgent.claude, ...byAgent.codex, ...byAgent.gemini];
+  const total = allTranscripts.length;
+
+  // Summary with date ranges
+  console.log("\n📊 Summary:");
+  console.log(`   ${"Agent".padEnd(15)} ${"Count".padEnd(10)} Date Range`);
+  console.log(`   ${"-".repeat(50)}`);
+
+  for (const agent of ["claude", "codex", "gemini"] as AgentType[]) {
+    const transcripts = byAgent[agent];
+    const name = AGENT_INFO[agent].name.padEnd(15);
+    const count = String(transcripts.length).padEnd(10);
+    const range = formatDateRange(transcripts);
+    console.log(`   ${name} ${count} ${range}`);
+  }
+
+  console.log(`   ${"-".repeat(50)}`);
+  console.log(`   ${"Total".padEnd(15)} ${total}`);
+
+  if (total === 0) {
+    console.log("\nNo transcripts found. Make sure you have used one of the supported agents.");
     return;
   }
 
   // Sort by most recent
-  const sorted = transcripts.sort((a, b) => b.modifiedAt - a.modifiedAt);
+  const sorted = allTranscripts.sort((a, b) => b.modifiedAt - a.modifiedAt);
 
-  // Show recent transcripts
-  console.log("📝 Recent transcripts:");
-  for (const t of sorted.slice(0, 10)) {
+  // Show recent transcripts with progress
+  console.log("\n📝 Recent transcripts:");
+  const recentCount = Math.min(10, sorted.length);
+  for (let i = 0; i < recentCount; i++) {
+    const t = sorted[i];
     const date = new Date(t.modifiedAt).toLocaleDateString();
-    const name = t.name.slice(0, 50) + (t.name.length > 50 ? "..." : "");
+    const name = t.name.slice(0, 45) + (t.name.length > 45 ? "..." : "");
     const agent = AGENT_INFO[t.agent].name;
     console.log(`   [${date}] ${agent}: "${name}" (${t.entryCount} entries)`);
   }
@@ -55,7 +123,9 @@ async function main() {
   const sample = sorted[0];
   console.log(`\n🔎 Sample transcript: ${sample.path}`);
 
+  process.stdout.write("   Loading entries... ");
   const { entries } = await parseEntries(sample.path, sample.agent, { limit: 50 });
+  process.stdout.write(`${entries.length} loaded\n`);
 
   // Count entry types
   const typeCounts: Record<string, number> = {};
@@ -64,7 +134,7 @@ async function main() {
   }
 
   console.log("   Entry types:");
-  for (const [type, count] of Object.entries(typeCounts)) {
+  for (const [type, count] of Object.entries(typeCounts).sort((a, b) => b[1] - a[1])) {
     console.log(`     ${type}: ${count}`);
   }
 
@@ -78,20 +148,25 @@ async function main() {
     console.log("\n   Conversation preview:");
     for (const msg of messages) {
       const role = msg.type === "user" ? "👤 User" : "🤖 Assistant";
-      const text = msg.text!.slice(0, 80).replace(/\n/g, " ");
-      console.log(`     ${role}: ${text}${msg.text!.length > 80 ? "..." : ""}`);
+      const text = msg.text!.slice(0, 70).replace(/\n/g, " ");
+      console.log(`     ${role}: ${text}${msg.text!.length > 70 ? "..." : ""}`);
     }
   }
 
   // Token usage
   if (sample.stats?.tokens) {
     const { input, output, total } = sample.stats.tokens;
-    console.log(`\n   Token usage: ${input} in / ${output} out (${total} total)`);
+    console.log(`\n   Token usage: ${input.toLocaleString()} in / ${output.toLocaleString()} out (${total.toLocaleString()} total)`);
   }
 
   // Tool usage
   if (sample.stats?.tools && Object.keys(sample.stats.tools).length > 0) {
-    console.log("   Tools used:", Object.keys(sample.stats.tools).join(", "));
+    const tools = Object.entries(sample.stats.tools)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([name, count]) => `${name}(${count})`)
+      .join(", ");
+    console.log(`   Top tools: ${tools}`);
   }
 }
 
