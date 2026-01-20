@@ -1,0 +1,2 @@
+{"uuid":"msg_001","type":"user","timestamp":"2024-01-15T10:00:00.000Z","sessionId":"session_unicode","message":{"role":"user","content":"Bonjour! Comment ça va? 你好世界 🎉 Привет мир"}}
+{"uuid":"msg_002","type":"assistant","timestamp":"2024-01-15T10:00:01.000Z","sessionId":"session_unicode","message":{"role":"assistant","content":[{"type":"text","text":"Hello! I can help with many languages: français, 中文, русский, 日本語, العربية, and emoji: 🚀✨💻"}]}}
