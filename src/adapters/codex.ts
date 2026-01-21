@@ -145,6 +145,9 @@ function extractToolInfo(
 
 /**
  * Extract token usage from Codex entry.
+ * Prefers last_token_usage (incremental) over total_token_usage (running total)
+ * to avoid double-counting when accumulating stats.
+ * Falls back to total_token_usage for older transcripts that don't have last_token_usage.
  */
 function extractTokenUsage(
   entryType: string,
@@ -154,7 +157,10 @@ function extractTokenUsage(
   if (payload.type !== "token_count") return undefined;
 
   const info = payload.info as Record<string, unknown> | undefined;
-  const usage = info?.total_token_usage as Record<string, unknown> | undefined;
+  // Prefer last_token_usage (incremental), fall back to total_token_usage for older transcripts
+  const usage = (info?.last_token_usage ?? info?.total_token_usage) as
+    | Record<string, unknown>
+    | undefined;
 
   if (!usage) return undefined;
 
@@ -440,6 +446,9 @@ export async function parseCodexTranscript(
     // Stats accumulator
     const statsAcc = createStatsAccumulator();
 
+    // Track last seen token total to deduplicate streaming updates
+    let lastSeenTokenTotal = 0;
+
     // Parse date from filename (rollout-YYYY-MM-DDTHH-mm-ss-...)
     const dateMatch = fileName.match(
       /rollout-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})/
@@ -489,7 +498,20 @@ export async function parseCodexTranscript(
         schemaLogger
       );
       if (entry) {
-        accumulateEntryStats(statsAcc, entry);
+        // Deduplicate token counts - Codex emits duplicate events during streaming
+        // Only count tokens when the total changes
+        if (entry.tokens?.total) {
+          if (entry.tokens.total === lastSeenTokenTotal) {
+            // Skip duplicate - don't count tokens for this entry
+            const entryWithoutTokens = { ...entry, tokens: undefined };
+            accumulateEntryStats(statsAcc, entryWithoutTokens);
+          } else {
+            lastSeenTokenTotal = entry.tokens.total;
+            accumulateEntryStats(statsAcc, entry);
+          }
+        } else {
+          accumulateEntryStats(statsAcc, entry);
+        }
       }
     });
 
