@@ -2,6 +2,30 @@
 
 Parse AI agent transcripts into a unified format. Supports Claude Code, Codex CLI, and Gemini CLI transcripts.
 
+## Status
+
+**Version**: 0.1.0 (initial release)
+**Users**: 1 (author only, not yet published to npm)
+
+This library is in early development. The core parsing functionality works and is well-tested, but the API may change before 1.0.
+
+**Testing**:
+- 166 unit tests, 917 assertions, all passing
+- 95% line coverage enforced by CI
+- E2E tests run against real local transcripts (Claude, Codex, Gemini) to catch format drift
+- CI runs on every push and PR (GitHub Actions)
+
+**What works**:
+- Parsing transcripts from all three agents into a unified format
+- Token counting, tool call extraction, thinking block parsing
+- Directory scanning and metadata extraction
+- Pagination for large transcripts
+
+**Known gaps**:
+- Transcript formats change frequently; new entry types may appear as agents evolve
+- Gemini CLI support is more limited (fewer transcripts to test against)
+- No browser support yet (Node.js/Bun only)
+
 ## Try It
 
 Scan your own transcripts to see what the library does:
